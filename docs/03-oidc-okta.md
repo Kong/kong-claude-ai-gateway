@@ -62,13 +62,14 @@ running `deck`.
 
 ## Claude Desktop configuration
 
-See [`claude-desktop/README.md`](../claude-desktop/README.md) for the known
-limitation this module has with Desktop specifically: Desktop's key field
-sends whatever you put in it as `x-api-key`, but Kong's `bearer` auth method
-expects a standard `Authorization: Bearer <token>` header — Desktop can't
-produce that, and it can't drive Okta's interactive redirect login either.
+See [`claude-desktop/README.md`](../claude-desktop/README.md#module-3--oidc--okta)
+— Desktop has a native OIDC gateway connection type (separate from the
+static API key field used in modules 1-2) that drives Okta's login itself
+via a local loopback callback on port `53180`, which is why that port is
+one of the registered redirect URIs in `docs/okta-setup.md`.
 
-Verify this module with `curl` or a browser instead:
+You can also verify this module directly with `curl` or a browser, without
+Desktop:
 
 - Browser: open `http://localhost:8000/anthropic` directly — you should be
   redirected to Okta's login page, then back to Kong with a session.

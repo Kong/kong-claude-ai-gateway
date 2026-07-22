@@ -26,7 +26,7 @@ services:
             anthropic_version: "2023-06-01"
         auth:
           header_name: x-api-key
-          header_value: '{vault://anthropic-secrets/anthropic-api-key}'
+          header_value: '{vault://anthropic-api-key/anthropic-api-key}'
         logging:
           log_payloads: true
           log_statistics: true
@@ -44,7 +44,7 @@ services:
     config:
       replace:
         headers:
-        - '{vault://anthropic-secrets/anthropic-api-key-header}'
+        - '{vault://anthropic-api-key/anthropic-api-key-header}'
 plugins:
 - name: key-auth
   config:
@@ -56,6 +56,6 @@ consumers:
   - key: ${{ env "DECK_CONSUMER_API_KEY" }}
 # vaults:
 # - name: konnect
-#   prefix: anthropic-secrets
+#   prefix: anthropic-api-key
 #   config:
 #     config_store_id: ${{ env "DECK_VAULT_CONFIG_STORE_ID" }}

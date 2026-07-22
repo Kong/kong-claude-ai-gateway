@@ -44,8 +44,9 @@ This creates (or verifies) your Konnect control plane and prints the
 `.env`.
 
 The script prints the remaining steps as manual instructions, including
-generating a data plane client certificate: **Gateway Manager → your control
-plane → Data Plane Nodes → New Data Plane Node** — that page always shows
+generating a data plane client certificate: **API Gateway → Control planes
+→ your control plane → Data plane nodes → New data plane node** — that page
+always shows
 the exact, current values for your account, and lets you generate/download a
 cert/key pair. Save them as `tls.crt` / `tls.key` under the directory named
 by `CERTS_DIR` in `.env` (defaults to `./certs/`, git-ignored), and
@@ -57,19 +58,28 @@ the `kong-dp` container.
 The bootstrap script prints this as a manual step because vault setup is a
 few clicks in the UI:
 
-1. **Gateway Manager → your control plane → Vaults → New Vault**
-2. Prefix: `anthropic-secrets`
-3. Add secret `anthropic-api-key` = your `ANTHROPIC_API_KEY`
-4. Add a second secret, `anthropic-api-key-header` = your
-   `ANTHROPIC_API_KEY_HEADER` (the `"x-api-key: <key>"` form, header name
-   included) — used by `request-transformer-advanced` on the
-   `claude-models` service, which sets a raw header value rather than just
-   the key
-5. Copy the vault's config store ID into `.env` as `KONG_VAULT_CONFIG_STORE_ID`
+1. **API Gateway → Control planes → your control plane → Vaults → New vault**
+2. Vault configuration: **Konnect**
+3. Prefix: `anthropic-api-key`
+
+   ![Creating a new Konnect vault](images/konnect-new-vault.png)
+
+4. Open the vault you just created, and under its secrets list click
+   **Store new secret** twice:
+   - `anthropic-api-key` = your `ANTHROPIC_API_KEY`
+   - `anthropic-api-key-header` = your `ANTHROPIC_API_KEY_HEADER` (the
+     `"x-api-key: <key>"` form, header name included) — used by
+     `request-transformer-advanced` on the `claude-models` service, which
+     sets a raw header value rather than just the key
+
+   ![Vault with both secrets stored](images/konnect-vault-secrets.png)
+
+5. Copy the vault's ID (shown on its detail page, e.g. `bf9d04e3-...`)
+   into `.env` as `KONG_VAULT_CONFIG_STORE_ID`
 
 Every `kong/*.yaml` in this repo references these as
-`{vault://anthropic-secrets/anthropic-api-key}` and
-`{vault://anthropic-secrets/anthropic-api-key-header}` — the real key value
+`{vault://anthropic-api-key/anthropic-api-key}` and
+`{vault://anthropic-api-key/anthropic-api-key-header}` — the real key value
 never appears in a file that gets committed.
 
 The vault's config store ID itself (account-specific, not a secret) is read
@@ -97,6 +107,18 @@ docker compose -f docker-compose.yml \
   -f docker-compose.otel.yml \
   up -d
 ```
+
+**What you should see:** within a few seconds of `docker compose up -d`,
+your `kong-dp` container connects to Konnect over mTLS. Confirm it in the
+UI at **API Gateway → Control planes → your control plane → Data plane
+nodes** — a node should appear with **Connected** / **In sync** /
+**Compatible** status:
+
+![Data plane node connected in Konnect](images/konnect-dataplane-connected.png)
+
+If it doesn't show up, double check `KONNECT_CP_ENDPOINT` /
+`KONNECT_TELEMETRY_ENDPOINT` in `.env` (step 5) and that `certs/tls.crt` /
+`tls.key` exist and match what Konnect issued (step 5).
 
 ## 8. Claude Desktop app
 

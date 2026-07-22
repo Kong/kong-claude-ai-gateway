@@ -88,5 +88,5 @@ Admin API rather than decK (`scripts/push-konnect-dashboard.sh`,
 
 The real Anthropic API key lives only in a Konnect vault, seeded once from
 your local `.env` (git-ignored) via `scripts/00-bootstrap-konnect.sh`.
-`kong/*.yaml` files reference it as `{vault://anthropic-secrets/anthropic-api-key}`
+`kong/*.yaml` files reference it as `{vault://anthropic-api-key/anthropic-api-key}`
 — never inline. Don't commit `.env` or anything under `certs/`.
