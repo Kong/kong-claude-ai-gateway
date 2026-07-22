@@ -49,4 +49,14 @@ running `deck`.
 
 See [`claude-desktop/README.md`](../claude-desktop/README.md) — same base
 URL as module 1, but now put your `KONG_CONSUMER_API_KEY` value in the
-Desktop app's API key field. Without it, requests get a `401` from Kong.
+**Gateway API key** field (auth scheme `x-api-key`, credential kind
+`Static API key`). Without it, requests get a `401` from Kong. **Test
+connection** should confirm model discovery and a real inference call:
+
+![Successful gateway connection test with the consumer key](images/desktop-module2-connection.png)
+
+You can also grab the key straight from Konnect instead of `.env`: **API
+Gateway → Control planes → your control plane → Consumers →
+claude-desktop → Credentials → Key Authentication → Copy**:
+
+![Copying the key from the claude-desktop consumer](images/konnect-consumer-key-copy.png)

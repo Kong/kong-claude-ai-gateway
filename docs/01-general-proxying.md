@@ -62,28 +62,3 @@ kind `Static API key`). **Test connection** should confirm both model
 discovery and a real inference call succeeding through Kong:
 
 ![Successful gateway connection test](images/desktop-module1-test-connection.png)
-
-## Verify
-
-```bash
-scripts/verify.sh 01-general-proxying
-```
-
-## What you should see
-
-- `verify.sh` prints `PASS: module 01: chat completion through Kong succeeded`
-- A `200` from `POST http://localhost:8000/anthropic` with a normal
-  Anthropic Messages API JSON body (`"role":"assistant"`, `"content":[...]`)
-- In Claude Desktop, a chat sent through the custom base URL gets a real
-  response
-- In Konnect: **API Gateway → Control planes → your control plane →
-  Gateway services / Routes / Plugins** shows the service/route/plugin
-  exactly as defined in `kong/01-general-proxying.yaml` (see the plugins
-  screenshot above)
-- `docker logs kong-dp` shows the request/response payload logged (since
-  `log_payloads: true`) — useful for confirming what actually went upstream
-
----
-
-Next: module 2, key auth at Kong (not yet built — see `REPO_PLAN.md` for the
-roadmap).

@@ -30,13 +30,20 @@ http://localhost:8000/anthropic
 
 1. **Gateway base URL**: same as module 1.
 2. **Gateway API key**: your `KONG_CONSUMER_API_KEY` value from `.env` —
-   this is a Kong-issued credential, not the real Anthropic key.
+   this is a Kong-issued credential, not the real Anthropic key. You can
+   also copy it straight from Konnect instead: **Consumers →
+   claude-desktop → Credentials → Key Authentication → Copy**.
+
+   ![Copying the key from the claude-desktop consumer](../docs/images/konnect-consumer-key-copy.png)
+
 3. **Gateway auth scheme**: `x-api-key` — must match `key-auth`'s
    `config.key_names` in `kong/02-key-auth.yaml`, which is set to
    `x-api-key`.
 4. **Credential kind**: `Static API key`.
 5. A missing or wrong key now gets rejected with a `401` from Kong before
-   the request ever reaches Anthropic.
+   the request ever reaches Anthropic. **Test connection** confirms it works:
+
+   ![Successful gateway connection test with the consumer key](../docs/images/desktop-module2-connection.png)
 
 ## Module 3 — OIDC + Okta
 
