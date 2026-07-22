@@ -11,23 +11,23 @@ Full design spec: [`REPO_PLAN.md`](REPO_PLAN.md).
 ## Architecture
 
 ```
-                    ┌─────────────────────┐
-                    │   Konnect (cloud)    │
-                    │  control plane +     │
-                    │  vault (API key)     │
-                    └──────────┬───────────┘
-                               │ hybrid mTLS
-                               ▼
-┌────────────┐        ┌───────────────┐        ┌──────────────────┐
-│   Claude    │  HTTP   │   Kong Gateway │  HTTPS  │  api.anthropic.com│
-│  Desktop    ├────────▶│  (data plane,  ├────────▶│  (3rd-party       │
-│    app      │         │   Docker)      │         │   inference)      │
-└────────────┘        └───────┬───────┘        └──────────────────┘
-                               │
-                     ┌─────────┼─────────┐
-                     ▼         ▼         ▼
-               Prometheus  Grafana   Jaeger / OTel
-               (metrics)  (dashboards) (traces)
+                        ┌───────────────────┐
+                        │  Konnect (cloud)  │
+                        │  control plane +  │
+                        │  vault (API key)  │
+                        └───────────────────┘
+                                 │ hybrid mTLS
+                                 ▼
+┌───────────┐           ┌────────────────┐           ┌─────────────────────┐
+│   Claude  │           │  Kong Gateway  │           │  api.anthropic.com  │
+│  Desktop  │── HTTP ──▶│  (data plane,  │─ HTTPS ──▶│      (3rd-party     │
+│    app    │           │    Docker)     │           │      inference)     │
+└───────────┘           └────────────────┘           └─────────────────────┘
+                                 │
+                        ┌─────────┴─────────┐
+                        ▼         ▼         ▼
+                       Prometheus  Grafana    Jaeger / OTel
+                       (metrics) (dashboards) (traces)
 ```
 
 ## Quick start
