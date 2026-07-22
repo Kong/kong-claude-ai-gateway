@@ -50,7 +50,7 @@ http://localhost:8000/anthropic
 Desktop has a native OIDC gateway login flow — this actually works,
 correcting an earlier version of this doc that claimed it didn't.
 
-![OIDC gateway connection](../docs/images/desktop-gateway-oidc.png)
+![OIDC gateway connection](../docs/images/desktop-module3-oidc-config.png)
 
 1. **Gateway base URL**: same as modules 1-2.
 2. **Sign-in session lifetime**: how long before Desktop shows a
@@ -67,10 +67,7 @@ correcting an earlier version of this doc that claimed it didn't.
    - **Bearer token**: `Access token` — matches Kong's `bearer` auth
      method, which validates an OAuth access token.
    - **Scopes**: `openid`.
-   - **Append offline_access**: **turn this off**, unless you've also
-     enabled the `Refresh Token` grant on the Okta app (`docs/okta-setup.md`
-     deliberately leaves it unchecked, so leaving this toggle on will make
-     Okta reject the `offline_access` scope request).
+   - **Append offline_access**: **on**.
    - **Redirect port**: `53180` — this is *why*
      `http://127.0.0.1:53180/callback` needed to be a registered redirect
      URI in Okta (`docs/okta-setup.md`, step 3): Desktop itself is the
@@ -80,6 +77,14 @@ correcting an earlier version of this doc that claimed it didn't.
      (authorization URL host only) unless Okta completes sign-in from a
      different host than the authorization URL's.
 4. Custom inference headers aren't needed for this module.
+5. Click **Test connection** — Desktop opens the browser and redirects you
+   to Okta to sign in (including MFA, if your org requires it):
+
+   ![Redirected to Okta to sign in](../docs/images/desktop-module3-okta-redirect.png)
+
+   Once you complete sign-in, **Test connection** shows green:
+
+   ![Test connection succeeded](../docs/images/desktop-module3-test-success.png)
 
 Modules 4-5 reuse this same OIDC connection — no Desktop config changes,
 just make sure the `team` claim you're relying on is actually present in

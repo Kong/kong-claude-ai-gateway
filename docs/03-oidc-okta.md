@@ -68,21 +68,18 @@ static API key field used in modules 1-2) that drives Okta's login itself
 via a local loopback callback on port `53180`, which is why that port is
 one of the registered redirect URIs in `docs/okta-setup.md`.
 
-You can also verify this module directly with `curl` or a browser, without
-Desktop:
+Fill in the **Gateway SSO IdP (OIDC)** fields and click **Test connection**:
 
-- Browser: open `http://localhost:8000/anthropic` directly — you should be
-  redirected to Okta's login page, then back to Kong with a session.
-- Bearer token: request one from Okta's token endpoint (client credentials
-  or resource owner password grant, whichever your Okta app allows), then:
+![OIDC gateway connection](images/desktop-module3-oidc-config.png)
 
-  ```bash
-  curl -i http://localhost:8000/anthropic \
-    -H "Authorization: Bearer ${OKTA_ACCESS_TOKEN}" \
-    -H 'content-type: application/json' \
-    -H 'anthropic-version: 2023-06-01' \
-    -d '{"model":"claude-haiku-4-5-20251001","max_tokens":16,"messages":[{"role":"user","content":"say hi"}]}'
-  ```
+Desktop opens your browser and redirects to Okta to sign in (including MFA,
+if your org requires it):
+
+![Redirected to Okta to sign in](images/desktop-module3-okta-redirect.png)
+
+Once you complete sign-in, **Test connection** shows green:
+
+![Test connection succeeded](images/desktop-module3-test-success.png)
 
 ---
 
