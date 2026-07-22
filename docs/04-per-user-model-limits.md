@@ -11,6 +11,39 @@ This is the first module where two different identities get two different
 outcomes from the gateway, using a claim that's already inside the token
 Okta issued in module 3 — no separate authorization system needed.
 
+## What's in the access token
+
+The `team` claim comes back as a plain custom claim on the Okta access
+token, alongside the standard OIDC ones. Decoded, a `kong-standard` user's
+token looks like:
+
+```json
+{
+  "ver": 1,
+  "jti": "AT.BD_sfLzShWmrnaHt3kX6CI0hhehOMyuaYOWK4EegfsQ",
+  "iss": "https://integrator-1741022.okta.com/oauth2/default",
+  "aud": "api://default",
+  "iat": 1784432546,
+  "exp": 1784436146,
+  "cid": "0oa15d4jr5oIR5Eel698",
+  "uid": "00u15c6ukel5jXEd0698",
+  "scp": ["openid"],
+  "auth_time": 1784432545,
+  "sub": "declan.keane+standard@konghq.com",
+  "company-groups": ["Everyone", "kong-standard"],
+  "clientId": "0oa15d4jr5oIR5Eel698",
+  "team": "kong-standard"
+}
+```
+
+`"team": "kong-standard"` is the one field this whole module cares about —
+it's what the `pre-function` plugin reads (see below) and what
+`kong/05-consumer-rate-limiting.yaml`'s `consumer_by`/`consumer_claims`
+later maps to a Consumer. `company-groups` shows where it likely comes
+from on the Okta side (a group membership mapped into a claim by the
+authorization server), but Kong only ever looks at `team` directly — how
+you populate that claim in your own Okta org is up to your claims mapping.
+
 ## What's in `kong/04-per-user-model-limits.yaml`
 
 Same `claude-chat` / `claude-models` services and `openid-connect` config as
@@ -25,8 +58,11 @@ module 3, plus:
 - two new routes on `claude-models`, matched on `paths: [/anthropic/v1/models]`
   plus a `headers: {team: [...]}` condition, each terminated by a
   `request-termination` plugin returning a static, team-specific model list:
-  - `team: kong-premium` → 4 models, including the flagship Opus
-  - `team: kong-standard` → 2 cheaper/faster models only
+  - `team: kong-premium` → all 10 models in the catalog, full detail
+    (capabilities, context window, etc.)
+  - `team: kong-standard` → 5 models only — specifically the 5 most
+    expensive (Opus-tier) ones, per the pricing table in
+    [`docs/05-consumer-rate-limiting.md`](05-consumer-rate-limiting.md)
   - the original `claude-models-route` (no header condition) stays as a
     fallback for any other/missing team, proxying the real Anthropic
     `/v1/models` response like module 3 did
@@ -63,15 +99,17 @@ running `deck`.
 
 ## Verify
 
-Get a bearer token from Okta whose access token includes a `team` claim
-(see [`docs/okta-setup.md`](okta-setup.md) — this needs a custom
-authorization server claim mapping `team` from a user/group attribute), then:
+Log into Claude Desktop (module 3's OIDC gateway connection) as a user
+whose token carries `team: kong-standard` — model discovery finds exactly
+the 5 Opus-tier models:
 
-```bash
-curl -s http://localhost:8000/anthropic/v1/models \
-  -H "Authorization: Bearer ${OKTA_ACCESS_TOKEN}" | python3 -m json.tool
-```
+![Standard team: 5 models discovered](images/desktop-module4-standard-5models.png)
 
-A `kong-premium` token should see 4 models; a `kong-standard` token should
-see 2; a token with no `team` claim (or a team that isn't one of the two
-above) falls through to the real Anthropic model list.
+Log in as a `kong-premium` user instead, and the chat model picker shows
+all 10:
+
+![Premium team: all 10 models available](images/desktop-module4-premium-10models.png)
+
+A token with no `team` claim (or a team that isn't one of the two above)
+falls through to the real Anthropic model list instead of either filtered
+set.
