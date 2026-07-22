@@ -1,0 +1,181 @@
+{
+  "id": null,
+  "uid": "ai-usage",
+  "title": "AI Usage (Claude Gateway)",
+  "description": "Purpose-built for this gateway: model usage, token usage, cost per token, usage by developer (consumer), status codes/errors, and latency. Sourced from the prometheus plugin's ai_metrics (kong_ai_llm_*) and standard request metrics — see scripts/enable-prometheus-metrics.sh.",
+  "schemaVersion": 40,
+  "version": 1,
+  "editable": true,
+  "timezone": "browser",
+  "time": { "from": "now-1h", "to": "now" },
+  "refresh": "10s",
+  "tags": ["kong", "ai-gateway"],
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Model usage",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 2,
+      "type": "bargauge",
+      "title": "Requests by model",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 1 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "orientation": "horizontal", "displayMode": "gradient" },
+      "targets": [
+        { "expr": "sum by (ai_model) (kong_ai_llm_requests_total)", "legendFormat": "{{ai_model}}", "refId": "A", "instant": true }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "bargauge",
+      "title": "Tokens by model",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 1 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": { "orientation": "horizontal", "displayMode": "gradient" },
+      "targets": [
+        { "expr": "sum by (ai_model) (kong_ai_llm_tokens_total)", "legendFormat": "{{ai_model}}", "refId": "A", "instant": true }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "piechart",
+      "title": "Request share by model",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 1 },
+      "targets": [
+        { "expr": "sum by (ai_model) (kong_ai_llm_requests_total)", "legendFormat": "{{ai_model}}", "refId": "A", "instant": true }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "row",
+      "title": "Cost",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 6,
+      "type": "bargauge",
+      "title": "Cost by model ($)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 10 },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" }, "overrides": [] },
+      "options": { "orientation": "horizontal", "displayMode": "gradient" },
+      "targets": [
+        { "expr": "sum by (ai_model) (kong_ai_llm_cost_total)", "legendFormat": "{{ai_model}}", "refId": "A", "instant": true }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "bargauge",
+      "title": "Cost per 1K tokens by model ($)",
+      "description": "sum(cost) / sum(tokens) * 1000, per ai_model — the effective blended rate actually being paid, useful to sanity-check against the configured input_cost/output_cost in kong/*.yaml",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 10 },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" }, "overrides": [] },
+      "options": { "orientation": "horizontal", "displayMode": "gradient" },
+      "targets": [
+        {
+          "expr": "1000 * sum by (ai_model) (kong_ai_llm_cost_total) / sum by (ai_model) (kong_ai_llm_tokens_total)",
+          "legendFormat": "{{ai_model}}",
+          "refId": "A",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Spend over time, by model",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 10 },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" }, "overrides": [] },
+      "targets": [
+        { "expr": "sum by (ai_model) (increase(kong_ai_llm_cost_total[5m]))", "legendFormat": "{{ai_model}}", "refId": "A" }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "row",
+      "title": "Usage by developer",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 10,
+      "type": "table",
+      "title": "Requests / tokens / cost by developer (consumer) × model",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 19 },
+      "targets": [
+        { "expr": "sum by (consumer, ai_model) (kong_ai_llm_requests_total)", "legendFormat": "requests", "refId": "A", "format": "table", "instant": true },
+        { "expr": "sum by (consumer, ai_model) (kong_ai_llm_tokens_total)", "legendFormat": "tokens", "refId": "B", "format": "table", "instant": true },
+        { "expr": "sum by (consumer, ai_model) (kong_ai_llm_cost_total)", "legendFormat": "cost", "refId": "C", "format": "table", "instant": true }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "row",
+      "title": "Status codes & errors",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 28 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Requests by status code (claude-chat-route)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 29 },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        { "expr": "sum by (code) (rate(kong_http_requests_total{route=\"claude-chat-route\"}[5m]))", "legendFormat": "{{code}}", "refId": "A" }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Error rate % (4xx+5xx / total, claude-chat-route)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 29 },
+      "fieldConfig": { "defaults": { "unit": "percent", "max": 100, "min": 0 }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "100 * sum(rate(kong_http_requests_total{route=\"claude-chat-route\",code=~\"4..|5..\"}[5m])) / sum(rate(kong_http_requests_total{route=\"claude-chat-route\"}[5m]))",
+          "legendFormat": "error %",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "type": "row",
+      "title": "Latency",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 37 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "Request latency p50/p95/p99 (claude-chat-route)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 38 },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum by (le) (rate(kong_request_latency_ms_bucket{route=\"claude-chat-route\"}[5m])))", "legendFormat": "p50", "refId": "A" },
+        { "expr": "histogram_quantile(0.95, sum by (le) (rate(kong_request_latency_ms_bucket{route=\"claude-chat-route\"}[5m])))", "legendFormat": "p95", "refId": "B" },
+        { "expr": "histogram_quantile(0.99, sum by (le) (rate(kong_request_latency_ms_bucket{route=\"claude-chat-route\"}[5m])))", "legendFormat": "p99", "refId": "C" }
+      ]
+    }
+  ]
+}

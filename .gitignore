@@ -1,0 +1,9 @@
+.env
+deck.env
+certs/
+*.pem
+*.crt
+*.key
+.deck/
+*.log
+.DS_Store

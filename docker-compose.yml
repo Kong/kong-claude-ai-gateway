@@ -1,0 +1,34 @@
+services:
+  kong-dp:
+    image: kong/kong-gateway:3.15
+    container_name: kong-dp
+    restart: unless-stopped
+    environment:
+      KONG_ROLE: data_plane
+      KONG_DATABASE: "off"
+      KONG_KONNECT_MODE: "on"
+      KONG_CLUSTER_MTLS: pki
+      KONG_CLUSTER_CONTROL_PLANE: ${KONNECT_CP_ENDPOINT}:443
+      KONG_CLUSTER_SERVER_NAME: ${KONNECT_CP_ENDPOINT}
+      KONG_CLUSTER_TELEMETRY_ENDPOINT: ${KONNECT_TELEMETRY_ENDPOINT}:443
+      KONG_CLUSTER_TELEMETRY_SERVER_NAME: ${KONNECT_TELEMETRY_ENDPOINT}
+      KONG_CLUSTER_CERT: /certs/tls.crt
+      KONG_CLUSTER_CERT_KEY: /certs/tls.key
+      KONG_LUA_SSL_TRUSTED_CERTIFICATE: system
+      KONG_PROXY_LISTEN: "0.0.0.0:8000, 0.0.0.0:8443 ssl"
+      KONG_STATUS_LISTEN: "0.0.0.0:8100"
+      KONG_LOG_LEVEL: debug
+      # Module 4's pre-function plugin requires "kong.plugins.jwt.jwt_parser"
+      # to decode the Okta access token for team-based routing. The default
+      # untrusted_lua mode is "strict", which ignores sandbox_requires
+      # entirely, so it must be relaxed to "on" for the allowlist below to
+      # take effect.
+      KONG_UNTRUSTED_LUA: "on"
+      KONG_UNTRUSTED_LUA_SANDBOX_REQUIRES: kong.plugins.jwt.jwt_parser
+      KONG_NGINX_HTTP_CLIENT_BODY_BUFFER_SIZE: 10m
+    volumes:
+      - ${CERTS_DIR:-./certs}:/certs:ro
+    ports:
+      - "8000:8000"
+      - "8443:8443"
+      - "8100:8100"

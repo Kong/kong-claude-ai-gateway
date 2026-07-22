@@ -1,0 +1,30 @@
+receivers:
+  otlp:
+    protocols:
+      # Must bind 0.0.0.0, not the newer default of 127.0.0.1 — Kong
+      # (a separate container) needs to reach this over the Docker network.
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+exporters:
+  otlp:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+  # Exposes both the traces/metrics the collector receives from Kong AND the
+  # collector's own internal telemetry (span/metric counts, queue size, etc.)
+  # as a scrapable /metrics endpoint — this is what the module 7 Grafana
+  # dashboard reads from, via Prometheus.
+  prometheus:
+    endpoint: 0.0.0.0:8889
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [otlp]
+    metrics:
+      receivers: [otlp]
+      exporters: [prometheus]

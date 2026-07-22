@@ -1,0 +1,44 @@
+# Module 7 (OpenTelemetry tracing). Layer this on top of the base stack
+# (and observability, if you want the otel-collector's own metrics scraped
+# into the same Prometheus/Grafana):
+#   docker compose -f docker-compose.yml -f docker-compose.observability.yml -f docker-compose.otel.yml up -d
+services:
+  kong-dp:
+    environment:
+      # Kong gates all tracing behind this, independent of the
+      # opentelemetry plugin's own config — off by default. Only needed
+      # while this overlay is in use.
+      KONG_OPENTELEMETRY_TRACING: "all"
+      KONG_TRACING_INSTRUMENTATIONS: "all"
+      # Separate from both the above and the opentelemetry plugin's own
+      # config.sampling_rate — this governs whether Kong's *internally*
+      # instrumented root span (from tracing_instrumentations) itself gets
+      # marked sampled. Defaults to 0.01 (1%). With sampling_strategy:
+      # parent_drop_probability_fallback, that internal span acts as the
+      # "parent," and its sampled=false verdict wins over the plugin's own
+      # 100% rate 99% of the time — this is what was silently dropping
+      # traces before Jaeger.
+      KONG_OPENTELEMETRY_TRACING_SAMPLING_RATE: "1"
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: jaeger
+    restart: unless-stopped
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: otel-collector
+    restart: unless-stopped
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./observability/otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+      - "8889:8889" # Prometheus exporter — scraped by the observability stack's Prometheus
+    depends_on:
+      - jaeger
