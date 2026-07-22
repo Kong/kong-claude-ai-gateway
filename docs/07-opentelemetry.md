@@ -153,8 +153,16 @@ curl -s http://localhost:16686/api/services   # should include "kong"
 Open `http://localhost:16686`, service `kong`, and pull a trace — you
 should see a full span tree (`kong.rewrite.plugin.pre-function`,
 `kong.router`, `kong.access.plugin.*`, per-plugin `header_filter` spans,
-etc.). AI usage dashboard: `http://localhost:3000/d/ai-usage`. OTel metrics
-dashboard: `http://localhost:3000/d/opentelemetry`.
+etc.).
+
+After a few real chat completions through Claude Desktop (module 3's OIDC
+connection), `http://localhost:3000/d/ai-usage` fills in end to end —
+requests/tokens/cost by model, cost per 1K tokens, spend over time, and the
+per-developer breakdown table:
+
+![AI Usage dashboard populated with real traffic](images/grafana-ai-usage-populated.png)
+
+OTel metrics dashboard: `http://localhost:3000/d/opentelemetry`.
 
 ---
 
