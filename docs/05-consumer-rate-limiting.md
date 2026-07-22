@@ -58,6 +58,19 @@ $1/$5 per 1M input/output tokens). Check
 Adjust the `limit` values in the `ai-rate-limiting-advanced` policies to
 whatever budget makes sense for your test.
 
+These are the two Consumer Groups the policies match against (**API
+Gateway → Control planes → your control plane → Consumers → Consumer
+groups**):
+
+![premium-team and standard-team consumer groups](images/konnect-consumer-groups.png)
+
+And the two policies themselves, on `ai-rate-limiting-advanced` (each one's
+`Match → Key` is the consumer group name above, `Type: consumer_group`):
+
+![Premium policy: limit 5, cost strategy, 60s window](images/konnect-ratelimit-premium-policy.png)
+
+![Standard policy: limit 0.5, cost strategy, 60s window](images/konnect-ratelimit-standard-policy.png)
+
 ## Apply it
 
 ```bash
@@ -82,9 +95,10 @@ running `deck`.
 
 ## Verify
 
-With a bearer token whose `team` claim is `kong-standard` (cheap budget —
-easier to exhaust for testing), send several `/anthropic` chat requests in
-under 60s. Once accumulated cost crosses $0.50 you should get a `429` with
-`ai-rate-limiting-advanced`'s rate limit error, before the request reaches
-Anthropic. A `kong-premium` token has 10x the budget and should keep
-succeeding through the same burst.
+Log into Claude Desktop (module 3's OIDC gateway connection) as a
+`kong-standard` user — cheap budget, easiest to exhaust for testing — and
+send several chat messages in Claude Chat within 60 seconds. Once
+accumulated cost crosses $0.50, you should get rate-limited by
+`ai-rate-limiting-advanced` before the request reaches Anthropic. Log in as
+a `kong-premium` user instead and repeat the same burst — 10x the budget
+means it should keep succeeding.
