@@ -102,27 +102,40 @@
 # The shakeout's own `AIGW-2.0-ISSUES-RESOLVED.md`, Issue 21 ("`opentelemetry`
 # plugin exports logs and metrics correctly, but never exports traces"),
 # root-caused (2026-07-03) that real span export additionally requires
-# Kong's CORE `KONG_TRACING_INSTRUMENTATIONS`/`KONG_TRACING_SAMPLING_RATE`
-# environment variables, set at the Kong Gateway node/process level —
-# completely separate from this policy's own `traces_endpoint`/
-# `sampling_rate` fields. Without them, Kong's tracing subsystem runs in
-# "propagation-only" mode: it counts/logs spans internally and propagates
-# W3C trace context, but never generates a real span object for this
-# policy's exporter to send — logs and metrics (which don't depend on
-# this core setting) export fine while traces silently don't. Once both
-# env vars were added to that shakeout's own DP compose file, 25 real
-# spans arrived at the collector immediately (`{"otelcol.signal": "traces",
-# "resource spans": 1, "spans": 25}`).
+# Kong's CORE environment variables, set at the Kong Gateway node/process
+# level — completely separate from this policy's own `traces_endpoint`/
+# `sampling_rate` fields. The shakeout cited two required vars:
+# `KONG_TRACING_INSTRUMENTATIONS` and `KONG_TRACING_SAMPLING_RATE`. Without
+# them, Kong's tracing subsystem runs in "propagation-only" mode: it
+# counts/logs spans internally and propagates W3C trace context, but never
+# generates a real span object for this policy's exporter to send — logs and
+# metrics (which don't depend on this core setting) export fine while traces
+# silently don't. Once both were added to that shakeout's own DP compose
+# file, 25 real spans arrived at the collector immediately
+# (`{"otelcol.signal": "traces", "resource spans": 1, "spans": 25}`).
+#
+# The 1.x track's own `docs/07-opentelemetry.md` additionally documents a
+# THIRD required var: `KONG_OPENTELEMETRY_TRACING: "all"`, explicitly stating
+# tracing is "entirely disabled (`off`) by default at the Kong process level,
+# independent of whether the `opentelemetry` plugin is configured." The 2.0
+# shakeout's Issue 21 citation does not mention this third var — unclear
+# whether AI Gateway 2.0's DP defaults tracing to "on" (making it unnecessary)
+# or the shakeout's fix was incomplete. Per Task 8's review finding, all three
+# vars are now added defensively to `docker-compose.aigw2.yml`, citing the
+# 1.x doc as well-evidenced and conservative, with both sampling-rate var
+# names (1.x's `KONG_OPENTELEMETRY_TRACING_SAMPLING_RATE` and 2.0's
+# `KONG_TRACING_SAMPLING_RATE`) set since the exact one this build reads is
+# unverified.
 #
 # This is a DIFFERENT environment (a different repo/DP/control plane) and
-# was root-caused via a DP process-level setting this task has zero way
+# was root-caused via DP process-level settings this task has zero way
 # to verify — no Docker, no way to start a `kong-dp-2.0` container, same
-# hard constraint confirmed 7 times across modules 1-6 (this is the 8th).
-# Cited here as secondhand, NOT re-derived or independently confirmed by
-# this module. The env vars have been added to `docker-compose.aigw2.yml`'s
-# `kong-dp-2.0` service on the strength of this citation, but their actual
-# effect (whether spans arrive at a real collector when this exact 2.0
-# build's DP is started) is unverified in this sandbox.
+# hard constraint confirmed 8+ times across modules 1-7. Cited here as
+# secondhand, NOT re-derived or independently confirmed by this module. The
+# env vars have been added to `docker-compose.aigw2.yml`'s `kong-dp-2.0`
+# service on the strength of these citations, but their actual effect
+# (whether spans arrive at a real collector when this exact 2.0 build's DP
+# is started) is unverified in this sandbox.
 #
 # ============================================================================
 # What this module actually does

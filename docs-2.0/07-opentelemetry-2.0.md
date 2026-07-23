@@ -16,20 +16,22 @@
 > ✅ **Attachment scope confirmed live: per-model, not forced-global.**
 > Same test pattern modules 2/4/5 used — `opentelemetry` does NOT share
 > `key-auth`'s global-only restriction.
-> ⚠️ **The core DP-level env var requirement is cited, secondhand
-> evidence — NOT independently verified here.** The shakeout's own
-> `AIGW-2.0-ISSUES-RESOLVED.md` (Issue 21) found that the `opentelemetry`
-> policy's config alone exports logs+metrics but never traces, and that
-> fixing it required two additional Kong Gateway **process-level**
-> environment variables (`KONG_TRACING_INSTRUMENTATIONS`,
+> ⚠️ **The core DP-level env vars are cited, secondhand evidence — NOT
+> independently verified here.** The shakeout's own `AIGW-2.0-ISSUES-RESOLVED.md`
+> (Issue 21) found that the `opentelemetry` policy's config alone exports
+> logs+metrics but never traces, and that fixing it required two additional
+> Kong Gateway **process-level** environment variables (`KONG_TRACING_INSTRUMENTATIONS`,
 > `KONG_TRACING_SAMPLING_RATE`), completely separate from the policy's own
-> `traces_endpoint`/`sampling_rate` fields. That finding is from a
-> *different* environment/repo/DP than this one. Both vars have been
-> added to `docker-compose.aigw2.yml`'s `kong-dp-2.0` service on the
-> strength of that citation, but this task has no way to start a
-> `kong-dp-2.0` container in this sandbox (no Docker, confirmed 8 times
-> now across every module in this track) to confirm they have the same
-> effect on this repo's 2.0 build.
+> `traces_endpoint`/`sampling_rate` fields. The 1.x track's own
+> `docs/07-opentelemetry.md` additionally documents a third required var
+> (`KONG_OPENTELEMETRY_TRACING: "all"`). **All three have now been added
+> to `docker-compose.aigw2.yml` defensively** per Task 8's review finding,
+> with both sampling-rate var names (1.x's `KONG_OPENTELEMETRY_TRACING_SAMPLING_RATE`
+> and 2.0's `KONG_TRACING_SAMPLING_RATE`) set since the exact one this build
+> reads is unverified. These findings are from *different* environments/repos/DPs
+> than this one. This task has no way to start a `kong-dp-2.0` container in
+> this sandbox (no Docker, confirmed 9 times now across every module in this
+> track) to confirm they have the same effect on this repo's 2.0 build.
 > ❌ **Actual span export (spans arriving at Jaeger/a collector) is NOT
 > achievable/verifiable in this sandbox** — same hard constraint as every
 > prior traffic-dependent module. No live span count was observed; the
@@ -121,8 +123,8 @@ comment.
 |---|---|---|
 | Plugin/policy scope | Global `opentelemetry` plugin (applies to every route) | Model-scoped `opentelemetry` policy (`global: false`), attached only to `claude-chat` |
 | Config shape | `traces_endpoint`, `sampling_rate`, `queue.{max_batch_size,max_coalescing_delay}`, deprecated `batch_span_count`/`batch_flush_delay`, `metrics.{endpoint,enable_*}` | `traces_endpoint`, `logs_endpoint`, `resource_attributes`, `sampling_rate` — no `metrics.*` block used here (this module ships tracing+logs only, not the metrics signal; Konnect's own dashboard, module 6, already covers usage metrics for this track) |
-| DP-level gates required | **Three**, all in `docker-compose.otel.yml`: `KONG_OPENTELEMETRY_TRACING: "all"` (tracing off by default, independent of plugin config), `KONG_TRACING_INSTRUMENTATIONS: "all"`, `KONG_OPENTELEMETRY_TRACING_SAMPLING_RATE: "1"` | **Two**, per the shakeout's Issue 21 citation: `KONG_TRACING_INSTRUMENTATIONS: "all"`, `KONG_TRACING_SAMPLING_RATE: "1.0"` (note the var name itself differs slightly from 1.x's `KONG_OPENTELEMETRY_TRACING_SAMPLING_RATE` — both are cited/documented as-is from their respective sources, not reconciled against each other here) |
-| Open gap | — | **The shakeout's Issue 21 citation for 2.0 does not mention an equivalent to 1.x's `KONG_OPENTELEMETRY_TRACING: "all"` gate at all.** Unclear whether AI Gateway 2.0's DP defaults tracing to "on" (making that gate unnecessary) or whether the shakeout's fix was incomplete/untested against a from-scratch DP. Not resolved here — no Docker to test either way. Flagged for whoever runs the first Docker-enabled verification of this module. |
+| DP-level gates required | **Three**, all in `docker-compose.otel.yml`: `KONG_OPENTELEMETRY_TRACING: "all"` (tracing off by default, independent of plugin config), `KONG_TRACING_INSTRUMENTATIONS: "all"`, `KONG_OPENTELEMETRY_TRACING_SAMPLING_RATE: "1"` | **Three**, per 1.x citation + shakeout's Issue 21 citation (Task 8 review): `KONG_OPENTELEMETRY_TRACING: "all"` (added defensively per 1.x's requirement; 2.0 shakeout's Issue 21 did not mention this one), `KONG_TRACING_INSTRUMENTATIONS: "all"`, `KONG_TRACING_SAMPLING_RATE: "1.0"` + `KONG_OPENTELEMETRY_TRACING_SAMPLING_RATE: "1"` (both sampling-rate names set defensively since the exact one this build reads is unverified). Added to `docker-compose.aigw2.yml` as secondhand evidence, not independently verified in this sandbox (no Docker). |
+| Open gap | — | ✅ **Resolved** — All three vars are now added defensively. The shakeout's Issue 21 citation did not mention `KONG_OPENTELEMETRY_TRACING: "all"`, only the latter two; 1.x's own module 7 doc lists all three and states tracing is "entirely disabled" by default without the first. Both sampling-rate var names are set to hedge against uncertainty about which one the 2.0 build reads. If real Docker testing reveals either var is unnecessary or if a different var name is needed, that will be flagged then. |
 | The core finding itself | N/A — 1.x's plugin config alone is sufficient for traces | **The `opentelemetry` POLICY config alone is NOT sufficient for traces** (only logs+metrics export) — core DP-level env vars are additionally required. This is the opposite of 1.x's own experience and is this module's headline "vs. 1.x" gotcha, per the shakeout's Issue 21 (cited, not independently reproduced here). |
 
 ## Apply it

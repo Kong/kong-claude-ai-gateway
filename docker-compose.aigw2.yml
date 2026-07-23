@@ -30,18 +30,23 @@ services:
       KONG_ANONYMOUS_REPORTS: "off"
       KONG_PLUGINS: bundled
       KONG_RESOLVER_FAMILY: "A"
-      # Module 7 (opentelemetry policy tracing). Per the shakeout's own
-      # Issue 21 finding (AIGW-2.0-ISSUES-RESOLVED.md, cited secondhand —
-      # NOT independently re-confirmed in this sandbox, no Docker here):
-      # the opentelemetry POLICY config alone (kong-2.0/07-opentelemetry.yaml)
-      # exports logs+metrics fine but never exports traces without these
-      # two core, process-level env vars also set. See
-      # docs-2.0/07-opentelemetry-2.0.md for the full citation and the
-      # "vs. 1.x" gap this leaves open (1.x's own module 7 also sets a
-      # third var, KONG_OPENTELEMETRY_TRACING: "all", that the 2.0
-      # shakeout's Issue 21 citation does not mention).
+      # Module 7 (opentelemetry policy tracing). Per the 1.x track's own
+      # docs/07-opentelemetry.md and the shakeout's Issue 21 finding
+      # (AIGW-2.0-ISSUES-RESOLVED.md, cited secondhand — NOT independently
+      # re-confirmed in this sandbox, no Docker here): the opentelemetry
+      # POLICY config alone (kong-2.0/07-opentelemetry.yaml) exports logs+metrics
+      # fine but never exports traces without these three core, process-level
+      # env vars also set. All three added defensively despite 2.0's shakeout
+      # Issue 21 only citing the latter two; the 1.x citation lists all three
+      # as required and tracing defaults to entirely OFF without the first.
+      # Both sampling_rate var names (1.x's KONG_OPENTELEMETRY_TRACING_SAMPLING_RATE
+      # and 2.0's KONG_TRACING_SAMPLING_RATE) are set defensively since the
+      # exact one this build reads is unverified. See docs-2.0/07-opentelemetry-2.0.md
+      # for the full analysis.
+      KONG_OPENTELEMETRY_TRACING: "all"
       KONG_TRACING_INSTRUMENTATIONS: "all"
       KONG_TRACING_SAMPLING_RATE: "1.0"
+      KONG_OPENTELEMETRY_TRACING_SAMPLING_RATE: "1"
     volumes:
       - ${CERTS_DIR_2_0:-./certs-2.0}:/certs:ro
       - ./kong-2.0/admin.conf:/templates/admin.conf:ro
