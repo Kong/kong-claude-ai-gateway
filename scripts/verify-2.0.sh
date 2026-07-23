@@ -28,6 +28,40 @@ case "$MODULE" in
     pass "module 01 (2.0): chat completion through Kong succeeded"
     rm -f "$body"
     ;;
+  02-key-auth)
+    # NOTE: kongctl cannot set a credential's key value declaratively (see
+    # kong-2.0/02-key-auth.yaml's header comment) — KONGCTL_CONSUMER_API_KEY
+    # must correspond to a credential created directly via the Konnect API
+    # with that value as `api_key` (docs-2.0/02-key-auth-2.0.md has the
+    # exact curl command), not just set in .env.2.0.
+    #
+    # NOTE: the request body's "model" field must be "claude-chat" (the
+    # ai_gateway_model's own name — config.model.alias defaults to it when
+    # unset), same as module 01. The brief's original Step 4/5 examples used
+    # "claude-sonnet-4-6" (a target name), which is the model_alias
+    # mismatch footgun documented in module 01 — corrected here.
+    : "${KONGCTL_CONSUMER_API_KEY:?Set KONGCTL_CONSUMER_API_KEY in .env.2.0}"
+    body=$(mktemp)
+
+    status=$(curl -s -o "$body" -w '%{http_code}' \
+      "${BASE_URL}/anthropic" \
+      -H 'content-type: application/json' \
+      -H 'anthropic-version: 2023-06-01' \
+      -d '{"model":"claude-chat","max_tokens":16,"messages":[{"role":"user","content":"say hi"}]}')
+    [[ "$status" == "401" ]] || fail "expected 401 with no key, got ${status} ($(cat "$body"))"
+    pass "module 02 (2.0): request without a key was rejected by Kong"
+
+    status=$(curl -s -o "$body" -w '%{http_code}' \
+      "${BASE_URL}/anthropic" \
+      -H "x-api-key: ${KONGCTL_CONSUMER_API_KEY}" \
+      -H 'content-type: application/json' \
+      -H 'anthropic-version: 2023-06-01' \
+      -d '{"model":"claude-chat","max_tokens":16,"messages":[{"role":"user","content":"say hi"}]}')
+    [[ "$status" == "200" ]] || fail "expected 200 with a valid key, got ${status} ($(cat "$body"))"
+    grep -q '"role":"assistant"' "$body" || fail "response body missing assistant role: $(cat "$body")"
+    pass "module 02 (2.0): chat completion through Kong succeeded with a valid key"
+    rm -f "$body"
+    ;;
   *)
     echo "No verify steps defined yet for module '$MODULE'" >&2
     exit 1
