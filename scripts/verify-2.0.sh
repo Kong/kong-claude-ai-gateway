@@ -102,6 +102,38 @@ case "$MODULE" in
     pass "module 03 (2.0): chat completion through Kong succeeded with a valid Okta token"
     rm -f "$body"
     ;;
+  04-per-user-model-limits)
+    # NOTE: this module's actual design (see
+    # docs-2.0/04-per-user-model-limits-2.0.md) does NOT use the two
+    # `route.headers`-gated models the brief originally drafted (that
+    # design was found to hit the real, WONT-FIX KOKO-3852 route-collision
+    # bug and was not built). Instead a single model-scoped `pre-function`
+    # policy on the existing `claude-chat` model intercepts
+    # `GET /anthropic/v1/models` directly and branches on the `team` JWT
+    # claim in Lua. The request shape below is unchanged from the brief —
+    # it's still a plain GET against `/anthropic/v1/models` with a bearer
+    # token — only the server-side implementation differs.
+    #
+    # NOTE: OKTA_ACCESS_TOKEN_PREMIUM/OKTA_ACCESS_TOKEN_STANDARD must be
+    # real Okta access tokens whose `team` claim is literally
+    # "kong-premium"/"kong-standard" respectively. Whether the SE demo
+    # Okta tenant's test app/user actually has a `team` custom claim
+    # configured was not chased down in this task (see
+    # docs-2.0/04-per-user-model-limits-2.0.md's closing section) — mint
+    # these against your own Okta app/authorization server if needed.
+    : "${OKTA_ACCESS_TOKEN_PREMIUM:?Set OKTA_ACCESS_TOKEN_PREMIUM (kong-premium team token)}"
+    : "${OKTA_ACCESS_TOKEN_STANDARD:?Set OKTA_ACCESS_TOKEN_STANDARD (kong-standard team token)}"
+
+    premium_count=$(curl -s "${BASE_URL}/anthropic/v1/models" \
+      -H "Authorization: Bearer ${OKTA_ACCESS_TOKEN_PREMIUM}" | jq '.data | length')
+    [[ "$premium_count" == "2" ]] || fail "expected 2 models for premium team, got ${premium_count}"
+    pass "module 04 (2.0): premium team sees 2 models"
+
+    standard_count=$(curl -s "${BASE_URL}/anthropic/v1/models" \
+      -H "Authorization: Bearer ${OKTA_ACCESS_TOKEN_STANDARD}" | jq '.data | length')
+    [[ "$standard_count" == "1" ]] || fail "expected 1 model for standard team, got ${standard_count}"
+    pass "module 04 (2.0): standard team sees 1 model"
+    ;;
   *)
     echo "No verify steps defined yet for module '$MODULE'" >&2
     exit 1
