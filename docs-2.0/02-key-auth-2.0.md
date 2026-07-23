@@ -147,30 +147,45 @@ Given that, this pass validated the corrected `key-auth` schema and
 attachment path via `kongctl diff` only — which round-trips through the
 real Konnect API and surfaces the same 400s/validation errors an `apply`
 would — rather than running a mutating `apply` that could have stripped
-modules 4/5/7's live policies from the shared control plane. The plan
-`kongctl diff` produced for the corrected design:
+modules 4/5/7's live policies from the shared control plane. This is a
+fresh `kongctl diff -f kong-2.0/02-key-auth.yaml` run (2026-07-23) against
+this file exactly as committed — ref `claude-key-auth`, display name
+"Claude Key Auth":
 
 ```
-+ [1:c:ai_gateway_identity_provider:claude-key-auth-idp] ai_gateway_identity_provider "claude-key-auth-idp" will be created
-  name: "claude-key-auth-idp"
-  type: "key-auth"
-  display_name: "Claude Key Auth (identity provider)"
+Plan: 1 to add, 1 to change, 1 to destroy
+
+=== Namespace: kong-claude-ai-gateway-2-0 ===
++ [1:c:ai_gateway_identity_provider:claude-key-auth] ai_gateway_identity_provider "claude-key-auth" will be created
+  display_name: "Claude Key Auth"
   config:
     hide_credentials: true
     key_names:
       [0]: "x-api-key"
+  name: "claude-key-auth"
+  type: "key-auth"
 
-~ [2:u:ai_gateway_model:claude-chat] ai_gateway_model "claude-chat" will be updated
-  access: map[identity_providers:[okta-oidc]] → map[identity_providers:[claude-key-auth-idp]]
+- [2:d:ai_gateway_identity_provider:okta-oidc] ai_gateway_identity_provider "okta-oidc" will be deleted
+  depends on: [1:c:ai_gateway_identity_provider:claude-key-auth]
+
+~ [3:u:ai_gateway_model:claude-chat] ai_gateway_model "claude-chat" will be updated
+  access: map[identity_providers:[okta-oidc]] → map[identity_providers:[claude-key-auth]]
+  policies: [claude-otel-tracing team-model-listing claude-token-rate-limit] → null
+  depends on: [2:d:ai_gateway_identity_provider:okta-oidc]
 ```
 
 Zero validation error on the `identity_providers` creation or the model
 update — confirming the corrected schema and attachment path both work
-against the real API. (The `access:` diff line shows the swap from the
-live control plane's *current* state, which already has module 3's
-`okta-oidc` attached from an earlier task — not a design claim about this
-module's own starting point, which in a fresh build starts with no
-`access.identity_providers` at all.)
+against the real API. (The `access:` and `policies:` diff lines show the
+swap from the live control plane's *current, already-advanced* state —
+module 3's `okta-oidc` attached and modules 4/5/7's policies live on
+`claude-chat` from earlier tasks in this branch — not a design claim
+about this module's own starting point, which in a fresh build starts
+with no `access.identity_providers` and no `policies` at all. This is the
+exact, concrete "apply in isolation strips later modules' state" risk
+called out in "Apply it" below: this `diff` plan alone would delete the
+`okta-oidc` identity provider outright and null out all three live
+policies if applied against this control plane as-is.)
 
 ## The credential-value gap
 

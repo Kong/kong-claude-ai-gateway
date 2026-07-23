@@ -341,6 +341,30 @@ kongctl apply -f kong-2.0/03-oidc-okta.yaml \
   --pat "${KONGCTL_DEFAULT_KONNECT_PAT}" --auto-approve
 ```
 
+Note for anyone applying this against the same shared Fel Tech control
+plane this repo has been testing against: if the live model already has
+module 4/5/7's policies attached (e.g. from an earlier task's real
+applies against a further-advanced state — `team-model-listing`,
+`claude-token-rate-limit`, `claude-otel-tracing`), applying THIS file
+alone will reset `claude-chat`'s `policies:` to whatever this file
+declares (`null`/omitted, since this module predates those policies),
+silently stripping all three from the live model — `kongctl apply` fully
+replaces a redeclared resource's own list fields with exactly what the
+applying file says, it does not merge. It will also swap
+`access.identity_providers` to `[okta-oidc]` only, dropping whatever
+later modules' `identity_providers` refs (e.g. module 2's
+`claude-key-auth`) were attached. That's expected and fine if you're
+walking the modules in strict sequential order from a clean state; if
+you're re-testing against an already-advanced live control plane, either
+(a) apply `kong-2.0/07-opentelemetry.yaml` (the latest cumulative file)
+instead, (b) manually add the later modules' `identity_providers`/
+`policies` refs back into this file's `claude-chat` before applying, or
+(c) if using `kongctl sync`, be aware its delete semantics are stricter
+still — it will also remove any separate resources (like an
+`identity_providers`/`policies` entry) this file doesn't declare at all.
+See module 2's "Why `diff`, not `apply`, this pass" section for a live,
+concrete example of this exact failure mode.
+
 **Real output from this session:**
 
 ```
