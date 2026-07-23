@@ -73,10 +73,21 @@ ai_gateways.models --extended`:
   array[string]`, sitting alongside `access.acls` in the model's `access`
   object — genuinely separate from the model's `policies: array[string]`
   field that module 2 found rejects `key-auth`.
-- The brief's assumed shape (`access.identity_providers` on the model,
-  referencing an `identity_providers[].ref`) is **confirmed correct as
-  literally written** — unlike module 2, no schema correction to the
-  brief's core shape was needed here.
+- The brief's assumed **attachment** shape (`access.identity_providers` on
+  the model, referencing an `identity_providers[].ref`) is **confirmed
+  correct as literally written**. The brief's assumed **`openid-connect`
+  config** shape (Step 1), however, was NOT fully correct: `login_action`
+  and `redirect_uri` — both in the brief and in the 1.x/decK track's own
+  `kong/03-oidc-okta.yaml` (`login_action: redirect`, a `redirect_uri:`
+  list) — do not exist on this resource. Confirmed via `kongctl explain
+  ai_gateways.identity_providers --extended`: the full field list for
+  `config` is `hide_credentials`, `key_in_body`, `key_in_header`,
+  `key_in_query`, `key_names`, `auth_methods`, `cache_tokens_salt`,
+  `client_id`, `client_secret`, `consumer_claims`, `consumer_optional`,
+  `issuer`, `scopes`, `ssl_verify` — no `login_action`, no `redirect_uri`.
+  Both fields are dropped from `kong-2.0/03-oidc-okta.yaml`, documented
+  there and in "Redirect URI for interactive login" below, instead of
+  silently omitted.
 - **Net effect:** `identity_providers`-based auth attaches **per-model**,
   via `access.identity_providers` — the opposite of module 2's
   `policies`+`global: true` mechanism, which gates the entire control
@@ -110,13 +121,10 @@ exported `TEST_TAG_VALUE`, ran `kongctl diff`):
 kongctl sends the literal tag string to the Konnect API, unexpanded. This
 first surfaced as a real `400` when `issuer` still used this syntax:
 `Bad Request: config.issuer: missing host in url` (because the unexpanded
-tag text isn't a URL). This matches Task 1's independent finding
-(`task-1-report.md`) that the brief's `${{ env
-"KONGCTL_VAULT_CONFIG_STORE_ID" }}` for the platform vault also wouldn't
-work — Task 1 sidestepped it by not declaring the vault via kongctl at
-all. This module can't sidestep the same way (there's no path to create an
-`ai_gateway_identity_provider` outside kongctl's ownership without
-fighting kongctl on every future apply), so instead: `issuer`/`client_id`/
+tag text isn't a URL). This module can't sidestep the same way (there's no
+path to create an `ai_gateway_identity_provider` outside kongctl's
+ownership without fighting kongctl on every future apply), so instead:
+`issuer`/`client_id`/
 `client_secret`/`cache_tokens_salt` are all `{vault://ai-vault/<key>}`
 references — the same mechanism modules 1/2 already use for the
 Anthropic/AWS secrets. Confirmed `{vault://...}` is **not** touched by
@@ -248,6 +256,36 @@ Docker-enabled run should try this token first (it's the one this doc
 already has evidence for), and fall back to a real interactive
 `authorization_code` login against `SE_DEMO_CLIENT_ID` (which does support
 that grant, per finding #1 above) if `bearer` rejects the M2M token.
+
+## Redirect URI for interactive login
+
+The `identity_providers` resource has no `redirect_uri` field to declare
+this in Kong config (confirmed via `kongctl explain
+ai_gateways.identity_providers --extended` — see "The central finding"
+above for the full field list). That doesn't mean Okta doesn't need one:
+for `authorization_code` login (the grant a real interactive user would
+use, as opposed to the M2M `client_credentials` token minted above), the
+Okta app itself still has to have a registered redirect URI, and Okta will
+reject the callback if it doesn't match.
+
+For this 2.0 track, register:
+
+```
+http://localhost:8010/anthropic
+```
+
+This is this track's proxy port (`8010`, per `docker-compose.aigw2.yml` —
+offset from the 1.x track's `8000` so both tracks can run side by side)
+plus `claude-chat`'s route path (`/anthropic`, `config.route.paths` in
+`kong-2.0/03-oidc-okta.yaml`). It mirrors the 1.x track's own
+`kong/03-oidc-okta.yaml`, which registers `http://localhost:8000/anthropic`
+(plus `/anthropic/v1/messages` and `/anthropic/v1/models` variants for its
+two separate Kong Gateway services/routes) — this 2.0 track has a single
+model/route, so only the one URI is needed. If you already registered the
+1.x track's three `:8000` URIs in the shared Okta app (same tenant/app as
+`docs/okta-setup.md`, per `kong-2.0/03-oidc-okta.yaml`'s header comment —
+no new Okta app is needed for this track), add this `:8010` one alongside
+them rather than replacing them.
 
 ## Apply it
 

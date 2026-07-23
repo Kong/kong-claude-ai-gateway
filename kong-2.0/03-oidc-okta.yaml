@@ -46,10 +46,29 @@
 #     field (confirmed present in `kongctl explain ai_gateways.models
 #     --extended`'s `access:` block, alongside `access.acls`) — genuinely
 #     separate from the model's `policies: array[string]` field that
-#     module 2 found does NOT accept `key-auth`. The brief's assumed shape
-#     (`access.identity_providers` on the model, referencing an
-#     `identity_providers[].ref`) is confirmed CORRECT as literally
-#     written — no schema correction was needed here, unlike module 2.
+#     module 2 found does NOT accept `key-auth`. The brief's assumed
+#     ATTACHMENT shape (`access.identity_providers` on the model,
+#     referencing an `identity_providers[].ref`) is confirmed CORRECT as
+#     literally written. However, the brief's assumed `openid-connect`
+#     CONFIG shape (Step 1) was NOT fully correct: `login_action` and
+#     `redirect_uri` — both present in the brief and in the 1.x/decK
+#     track's own `kong/03-oidc-okta.yaml` (`login_action: redirect`,
+#     `redirect_uri: [...]`) — are NOT fields on this resource. Confirmed
+#     via `kongctl explain ai_gateways.identity_providers --extended`:
+#     `config` only accepts `hide_credentials`, `key_in_body`,
+#     `key_in_header`, `key_in_query`, `key_names`, `auth_methods`,
+#     `cache_tokens_salt`, `client_id`, `client_secret`, `consumer_claims`,
+#     `consumer_optional`, `issuer`, `scopes`, `ssl_verify` — no
+#     `login_action`, no `redirect_uri`. Both are dropped below (the
+#     brief's shape included them; this schema does not) — documented
+#     explicitly here, not silently omitted: this module has no
+#     schema-level way to declare a login redirect action or a registered
+#     redirect URI on the identity provider itself. See
+#     docs-2.0/03-oidc-okta-2.0.md's "Redirect URI for interactive login"
+#     section for what a reader should register in their own Okta app
+#     anyway (`http://localhost:8010/anthropic`, this track's proxy
+#     port/route), since Okta itself still requires one even though Kong's
+#     `identity_providers` config has nowhere to declare it.
 #   - Net effect: `identity_providers`-based auth (this module) attaches
 #     PER-MODEL via `access.identity_providers`, unlike `policies`-based
 #     `key-auth` (module 2), which could only be applied `global: true`
@@ -80,11 +99,7 @@
 # it, it's sent to the Konnect API as-is. This first surfaced here as a
 # live 400 (`config.issuer: missing host in url` — because the raw
 # unexpanded tag string isn't a valid URL) when this module's config was
-# still using that syntax for `issuer`. This matches Task 1's independent
-# finding (`docs-2.0/00-prerequisites-2.0.md`/`task-1-report.md`) that the
-# brief's `${{ env "KONGCTL_VAULT_CONFIG_STORE_ID" }}` for the platform
-# vault also wouldn't work — Task 1 sidestepped it by not declaring the
-# vault via kongctl at all. This module can't sidestep it the same way
+# still using that syntax for `issuer`. This module can't sidestep it
 # (there's no non-kongctl path to create an `ai_gateway_identity_provider`
 # short of the raw API, which would fight kongctl's ownership of it), so
 # instead: `issuer`/`client_id`/`client_secret`/`cache_tokens_salt` are all
