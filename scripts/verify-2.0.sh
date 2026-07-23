@@ -161,6 +161,48 @@ case "$MODULE" in
     [[ "$saw_429" == "true" ]] || fail "expected at least one 429 within 20 requests, never saw one"
     pass "module 05 (2.0): rate limit tripped within 20 requests"
     ;;
+  07-opentelemetry)
+    # NOTE: this case was written for a future Docker-enabled run — not
+    # exercised in this task (no Docker, no way to start kong-dp-2.0 or
+    # the otel-collector/Jaeger stack in this sandbox). Per
+    # docs-2.0/07-opentelemetry-2.0.md, config-side ("claude-otel-tracing"
+    # policy created, global:false, attached to claude-chat) IS confirmed
+    # live against the real control plane — only the traffic/span-export
+    # side below is unverified.
+    #
+    # Prereqs beyond OKTA_ACCESS_TOKEN (same var module 03/05's cases
+    # use): docker-compose.aigw2.yml's kong-dp-2.0 must be (re)started
+    # with KONG_TRACING_INSTRUMENTATIONS/KONG_TRACING_SAMPLING_RATE in
+    # effect (added to that file by this module — see its comment for the
+    # cited, secondhand shakeout finding this depends on), and
+    # docker-compose.otel.yml's otel-collector/jaeger services must be up
+    # (same collector the 1.x track uses — no re-pointing needed).
+    : "${OKTA_ACCESS_TOKEN:?Set OKTA_ACCESS_TOKEN}"
+    JAEGER_URL="${JAEGER_URL:-http://localhost:16686}"
+
+    for i in $(seq 1 5); do
+      status=$(curl -s -o /dev/null -w '%{http_code}' "${BASE_URL}/anthropic" \
+        -H "Authorization: Bearer ${OKTA_ACCESS_TOKEN}" \
+        -H 'content-type: application/json' -H 'anthropic-version: 2023-06-01' \
+        -d '{"model":"claude-chat","max_tokens":16,"messages":[{"role":"user","content":"say hi"}]}')
+      [[ "$status" == "200" ]] || fail "expected 200 on request ${i}/5, got ${status}"
+    done
+    pass "module 07 (2.0): sent 5 requests through claude-chat"
+
+    services=$(curl -s "${JAEGER_URL}/api/services")
+    echo "$services" | grep -q 'claude-ai-gateway-2.0' \
+      || fail "expected service \"claude-ai-gateway-2.0\" in Jaeger's service list, got: ${services}"
+    pass "module 07 (2.0): Jaeger lists the claude-ai-gateway-2.0 service"
+
+    # Pull recent traces for that service and count spans. The shakeout's
+    # own resolved-Issue-21 result (cited, not reproduced here) saw 25
+    # spans arrive from a batch of requests once both the policy config
+    # and the DP tracing env vars were set together.
+    trace_count=$(curl -s "${JAEGER_URL}/api/traces?service=claude-ai-gateway-2.0&limit=20" \
+      | jq '.data | length')
+    [[ "$trace_count" -ge 1 ]] || fail "expected at least 1 trace for claude-ai-gateway-2.0 in Jaeger, got 0 — check kong-dp-2.0's KONG_TRACING_INSTRUMENTATIONS/KONG_TRACING_SAMPLING_RATE env vars actually took effect (docker exec kong-dp-2.0 env | grep TRACING)"
+    pass "module 07 (2.0): ${trace_count} trace(s) found for claude-ai-gateway-2.0 in Jaeger"
+    ;;
   *)
     echo "No verify steps defined yet for module '$MODULE'" >&2
     exit 1
