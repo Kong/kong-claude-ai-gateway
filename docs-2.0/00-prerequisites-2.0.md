@@ -1,7 +1,6 @@
 # 00 — Prerequisites (AI Gateway 2.0 track, one-time setup)
 
-> **Status:** ✅ verified live 2026-07-23 against the Fel Tech org
-> (`kongctl` 1.6.0, `kong/kong-ai-gateway-dev:2.0.1-rc.1`).
+> **Status:** ✅ Konnect-side bootstrap (control plane, config store, vault) verified live 2026-07-23 against the Fel Tech org (`kongctl` 1.6.0). ⚠️ Docker Compose data-plane bring-up (§5) not yet exercised in this environment (no Docker socket access) — `docker-compose.aigw2.yml` validated for syntax only.
 
 This is the AI Gateway 2.0 counterpart to [`docs/00-prerequisites.md`](../docs/00-prerequisites.md)
 — a genuinely separate track, not a variant of the 1.x setup. AI Gateway 2.0
@@ -79,6 +78,8 @@ bootstrap script also prints these directly so you can skip hunting for
 them in the UI.
 
 ## 5. Bring up the 2.0 data plane
+
+> **Note:** This step has not yet been live-verified in this repository's CI/sandbox environment. After running the commands below, confirm in the Konnect UI (`claude-ai-gateway` → Data Plane Nodes) that a node appears in `Connected` state.
 
 ```bash
 docker compose -f docker-compose.aigw2.yml up -d
