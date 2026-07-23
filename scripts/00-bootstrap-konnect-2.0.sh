@@ -59,6 +59,11 @@ echo "    config store id: ${store_id}"
 
 echo
 echo "==> Seeding secrets into config store..."
+# Upserts: create if missing, PUT (rotate in place) if already present. The
+# Konnect API supports both (create-ai-gateway-config-store-secret /
+# update-ai-gateway-config-store-secret) so a re-run with real values always
+# converges the store to what's in .env.2.0 — no manual UI deletion needed
+# to move from a placeholder to a real value.
 seed_secret() {
   local key="$1" value="$2"
   if [[ -z "$value" ]]; then
@@ -70,12 +75,16 @@ seed_secret() {
     "${API}/ai-gateways/${gateway_id}/config-stores/${store_id}/secrets" \
     | jq -r --arg key "$key" '.data[] | select(.key == $key) | .key')
   if [[ -n "$existing" ]]; then
-    echo "    '${key}' already present, skipping (delete it in the Konnect UI to rotate)"
+    local put_body
+    put_body=$(jq -n --arg v "$value" '{"value": $v}')
+    curl -sf "${json_auth[@]}" -X PUT -d "$put_body" \
+      "${API}/ai-gateways/${gateway_id}/config-stores/${store_id}/secrets/${key}" >/dev/null
+    echo "    updated '${key}'"
     return
   fi
-  local body
-  body=$(jq -n --arg k "$key" --arg v "$value" '{"key": $k, "value": $v}')
-  curl -sf "${json_auth[@]}" -X POST -d "$body" \
+  local post_body
+  post_body=$(jq -n --arg k "$key" --arg v "$value" '{"key": $k, "value": $v}')
+  curl -sf "${json_auth[@]}" -X POST -d "$post_body" \
     "${API}/ai-gateways/${gateway_id}/config-stores/${store_id}/secrets" >/dev/null
   echo "    created '${key}'"
 }

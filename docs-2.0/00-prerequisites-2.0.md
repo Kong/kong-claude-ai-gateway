@@ -48,9 +48,13 @@ control plane or vault:
    already exist.
 3. It seeds that config store with whatever of `ANTHROPIC_API_KEY`,
    `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION` you've set in
-   `.env.2.0` (skipping any that are blank, and skipping any secret key
-   that already exists — re-running the script never overwrites a stored
-   secret; delete it in the Konnect UI first to rotate it).
+   `.env.2.0` (skipping any that are blank). As of module 1, this is an
+   **upsert**: if the key already exists it's updated in place via the
+   Konnect API's `PUT .../secrets/{key}`, so re-running with a real value
+   correctly rotates an earlier placeholder — no manual UI deletion step
+   needed (live-verified during module 1: the placeholder
+   `anthropic-api-key`/`aws-region` seeded in Task 1 were updated to real
+   values, and the two AWS keys not yet set in Task 1 were created).
 4. It creates the `ai_gateway_vault` named `ai-vault` pointing at that
    config store. Every `kong-2.0/*.yaml` in this repo references secrets as
    `{vault://ai-vault/<key>}` — the real values never appear in a
