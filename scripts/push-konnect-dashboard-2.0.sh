@@ -24,6 +24,10 @@
 #      (a plain string field — the model alias, e.g. "claude-chat") and
 #      `control_plane` (the CP/gateway id) as filterable fields, so this
 #      script scopes the dashboard on those two instead of `route`.
+#      (The schema lookup was performed via the kong-konnect MCP tool's
+#      cross-org call, not first-party against Fel Tech directly; field
+#      correctness is validated by the successful dashboard creation/update
+#      and GET confirmation in docs-2.0/06-observability-2.0.md.)
 #   3. `.com` vs `.tech`: confirmed live that `/v2/dashboards` (and the
 #      rest of the Analytics/Dashboards API) is reachable on `.tech` under
 #      the SAME PAT used for the AI Gateway 2.0 `/v1/ai-gateways` calls —

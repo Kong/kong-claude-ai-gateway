@@ -62,6 +62,7 @@ gateway id / `claude-chat` alias without a validation error when queried
 live (empty result sets, as expected — no traffic has flowed through this
 CP in this sandbox; see the 05/consumer-rate-limiting doc for why: no
 Docker, no serverless proxy URL for this environment).
+**Note:** the schema lookup for these fields was performed via the `kong-konnect` MCP tool's cross-org `datasource_config` call (not a first-party Fel Tech API query), but the fields' actual correctness is independently validated by the successful `POST /v2/dashboards` and subsequent `GET /v2/dashboards` confirmation shown in the Verify section below.
 
 Filtering on `ai_request_model` alone would already scope the dashboard to
 `claude-chat` traffic across the whole org; adding `control_plane` narrows
