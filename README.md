@@ -68,20 +68,58 @@ dashboard pieces are the exception — applied directly via the Konnect
 Admin API rather than decK (`scripts/push-konnect-dashboard.sh`,
 `scripts/enable-prometheus-metrics.sh`); see their docs for why.
 
+## AI Gateway 2.0 (parallel track)
+
+A second, independently runnable track covering the same modules against
+Kong's **AI Gateway 2.0** — a separate control-plane type and data-plane
+binary, configured via `kongctl` instead of `decK`. Runs alongside the 1.x
+stack above (offset ports, separate `.env.2.0`) — see
+[`docs-2.0/00-prerequisites-2.0.md`](docs-2.0/00-prerequisites-2.0.md) to
+start.
+
+Every module below was built and verified in an environment with no Docker
+socket access, and AI Gateway 2.0 currently has no serverless/Konnect-hosted
+proxy URL for this control plane (`proxy_urls: []`, confirmed repeatedly) —
+so every row splits into two halves: the Konnect-side config is genuinely
+live-verified (created via `kongctl apply`, confirmed via direct `GET`
+calls, zero `kongctl diff` drift), but no actual HTTP traffic was ever sent
+through a data plane. Treat the "traffic untested" half as a real gap, not
+a formality — see each doc's status banner for the full trail.
+
+| # | Module | Doc | Status |
+|---|--------|-----|--------|
+| 0 | Prerequisites (one-time) | [docs-2.0/00-prerequisites-2.0.md](docs-2.0/00-prerequisites-2.0.md) | ✅ Konnect bootstrap (CP, config store, vault) verified live · ⚠️ Docker Compose data-plane bring-up not exercised |
+| 1 | General proxying & setup | [docs-2.0/01-general-proxying-2.0.md](docs-2.0/01-general-proxying-2.0.md) | ✅ config verified (model + providers, zero drift) · ❌ traffic untested — central open question (KOKO-3854) not re-tested |
+| 2 | Key auth at Kong | [docs-2.0/02-key-auth-2.0.md](docs-2.0/02-key-auth-2.0.md) | ✅ config verified — note: `global: true` (gates the whole control plane, unlike 1.x's scoped key-auth) · ⚠️ traffic untested · ⚠️ credential secret value not retrievable after creation (beta API limitation) |
+| 3 | OIDC + Okta | [docs-2.0/03-oidc-okta-2.0.md](docs-2.0/03-oidc-okta-2.0.md) | ✅ config verified twice, real Okta token minted · ❌ traffic untested |
+| 4 | Per-user model access limits | [docs-2.0/04-per-user-model-limits-2.0.md](docs-2.0/04-per-user-model-limits-2.0.md) | ✅ config verified — note: single-model `pre-function` branching, not the naive multi-model design, because that design hits a real Kong bug (KOKO-3852, WONT-FIX) · ❌ traffic untested |
+| 5 | Consumer-based rate limiting | [docs-2.0/05-consumer-rate-limiting-2.0.md](docs-2.0/05-consumer-rate-limiting-2.0.md) | ✅ config verified against real plugin schema, per-model scope confirmed · ❌ traffic untested — no 429 observed |
+| 6 | Kong observability | [docs-2.0/06-observability-2.0.md](docs-2.0/06-observability-2.0.md) | ✅ dashboard created and confirmed live via the Konnect API — filtered by `ai_request_model`, not `route` (no route-equivalent exists for AI Gateway 2.0) |
+| 7 | OpenTelemetry tracing | [docs-2.0/07-opentelemetry-2.0.md](docs-2.0/07-opentelemetry-2.0.md) | ✅ policy config verified against real schema, per-model scope confirmed · ❌ span export unverified — no data plane to confirm the process-level env vars this needs |
+| 8 | Metering & billing integration | — | planned (both tracks) |
+
+Every status above reflects a real, live-verified result against a Konnect
+org as of this table's last edit — not an assumption. See each module's doc
+for the exact date/build tested.
+
 ## Repo layout
 
 ```
 ├── docker-compose.yml               # kong data plane only
 ├── docker-compose.observability.yml # module 7: prometheus + grafana (layer on top)
 ├── docker-compose.otel.yml          # module 7: jaeger + otel-collector (layer on top)
+├── docker-compose.aigw2.yml  # AI Gateway 2.0 hybrid data plane overlay
 ├── .env.example
+├── .env.2.0.example       # AI Gateway 2.0 track: kongctl PAT, config store, consumer key vars
 ├── scripts/               # bootstrap, verify, teardown,
 │                          # push-konnect-dashboard (module 6), enable-prometheus-metrics (module 7)
 ├── kong/                  # one decK YAML per module, cumulative (except module 6, see its doc)
+├── kong-2.0/               # AI Gateway 2.0 track: one kongctl YAML per module, cumulative
 ├── observability/         # prometheus.yml, grafana provisioning + dashboards, otel-collector config,
 │                          # claude-code-usage-dashboard.json (module 6), prometheus-plugin.json (module 7)
 ├── claude-desktop/        # Desktop app settings, per module
-└── docs/                  # one walkthrough per module
+├── docs/                  # one walkthrough per module
+└── docs-2.0/                # AI Gateway 2.0 track: one walkthrough per module
 ```
 
 ## Secrets
