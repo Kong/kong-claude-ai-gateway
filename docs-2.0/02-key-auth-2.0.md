@@ -1,76 +1,176 @@
 # 02 — Key auth (AI Gateway 2.0 track)
 
-> **Status (2026-07-23, verified against `kongctl` 1.6.0 / Fel Tech org / `us.api.konghq.tech`):**
-> ✅ **Control-plane side fully live-verified**: `kongctl apply` created the
-> `claude-key-auth` `ai_gateway_policy` (type `key-auth`, `global: true`),
-> the `claude-desktop` `ai_gateway_consumer`, and its
-> `claude-desktop-api-key` credential — all confirmed present server-side
-> via direct `GET` calls to the Konnect API, not just the `kongctl` plan. A
-> second `kongctl diff` shows zero drift. Getting there required correcting
-> two real, live-discovered schema mismatches from the task brief's literal
-> YAML — see "vs. the brief" below; the bigger of the two
-> (`key-auth` cannot attach to a model at all) changes the mechanism this
-> module uses, not just field names.
+> **Status (2026-07-23, corrected and re-verified against `kongctl` 1.6.0 /
+> Fel Tech org / `us.api.konghq.tech`):**
+> ⚠️ **This module was rebuilt from an earlier, incomplete design.** The
+> original version of this file modeled key-auth as a `policies:` entry
+> with `global: true`, because a real, live `kongctl apply` 400 showed
+> `key-auth` cannot attach to a model via `policies:`. That 400 is still
+> real (re-confirmed this pass) — but the conclusion drawn from it (key-auth
+> can therefore ONLY ever be global, unlike OIDC) was wrong. `kongctl
+> explain ai_gateways.identity_providers --extended` shows `type: string
+> required allowed: key-auth|openid-connect` — key-auth can ALSO be modeled
+> as an `identity_providers` entry, attached per-model via
+> `access.identity_providers`, exactly like OIDC. See "The correction"
+> below for the full trail.
+> ✅ **Control-plane side live-verified via `kongctl diff` against the real
+> Konnect API** (schema validation, not a mutating apply — see "Why `diff`,
+> not `apply`, this pass" below): a `claude-key-auth`
+> `ai_gateway_identity_provider` (`type: key-auth`) attaches cleanly to
+> `claude-chat` via `access.identity_providers`, with zero validation
+> error. The consumer/credential mechanism (`claude-desktop` +
+> `claude-desktop-api-key`) is unchanged from the original design — see
+> "The credential-value gap" below, still accurate as written.
 > ❌ **Data-plane side NOT verified** — same constraint as module 1: no
 > Docker access in this sandbox, and AI Gateway 2.0 has no serverless/
 > Konnect-hosted proxy URL for this control plane (`proxy_urls: []`,
-> confirmed live). The brief's Step 4 (curl the route with/without a key,
-> 3+ times each) could not be run. `scripts/verify-2.0.sh 02-key-auth` is
-> written and ready for the first real hybrid-DP run, but has not itself
+> confirmed live in the original pass). `scripts/verify-2.0.sh 02-key-auth`
+> is written and ready for the first real hybrid-DP run, but has not itself
 > been executed.
 > ⚠️ **Credential secret value NOT retrievable after creation** — a real,
 > confirmed limitation of this beta API, not an oversight: see "The
-> credential-value gap" below. `KONGCTL_CONSUMER_API_KEY` in `.env.2.0`
-> cannot be wired into `kongctl apply` the way the brief assumed; a
-> Docker-enabled operator needs to create the credential's secret value
-> out-of-band, via a direct Konnect API call, before `scripts/verify-2.0.sh
-> 02-key-auth` can pass.
+> credential-value gap" below. Unchanged by this correction — the
+> credential mechanism is the same regardless of how the gate attaches.
 
 ## What this adds
 
-A global `key-auth` policy (`claude-key-auth`) on the `claude-ai-gateway`
-control plane, plus a Consumer (`claude-desktop`) and one credential
-(`claude-desktop-api-key`) for it to authenticate against. The
-`claude-chat` model from module 1 is unchanged in this file except that it
-now sits behind this policy (see "the big finding" below for exactly how).
+A `key-auth` `identity_providers` entry (`claude-key-auth`) attached to the
+`claude-chat` model via `access.identity_providers`, plus a Consumer
+(`claude-desktop`) and one credential (`claude-desktop-api-key`) for it to
+authenticate against.
 
-## vs. 1.x
+## The correction (2026-07-23)
 
-| | 1.x (`kong/02-key-auth.yaml`) | 2.0 (`kong-2.0/02-key-auth.yaml`) |
-|---|---|---|
-| Auth mechanism | `key-auth` plugin declared globally in `plugins:` (applies to every Route in the control plane) | `key-auth` `ai_gateway_policy` with `global: true` (applies to every route this AI Gateway control plane compiles) |
-| Consumer | `consumers:` entry with `keyauth_credentials: [{key: ...}]` — key value set inline | `ai_gateway_consumer` (`type: api-key`) with a nested `credentials:` entry — **key value is NOT settable inline**, Konnect auto-generates it (see below) |
-| Where auth "attaches" | Implicit — a global plugin applies everywhere by default | Explicit `global: true` on the policy. **Not** the model's `policies:` list — see the big finding below |
+This module was originally built, then reviewed by a Kong SE with
+hands-on AI Gateway 2.0 experience, who caught that its "key-auth is
+global-only" conclusion was based on investigating only one attachment
+path (`policies:`) and stopping there, without checking whether a second
+path existed — which it does.
 
-**The big finding — this is the important structural correction, not a
-field-rename:** the task brief's Step 1 (and this module's own first
-draft) declared `key-auth` as a policy referenced from the model's
-`policies:` list — mirroring how the brief describes OIDC attaching in a
-later module. That shape does **not work**. Applying it produces a real,
-live `400`:
+**What was real and is still real:** `key-auth` genuinely cannot attach to
+a model via the model's `policies:` list. A live `kongctl apply` (re-run
+this pass) still 400s the same way:
 
 ```
 Bad Request: ai_gateway_model.policies: policy "claude-key-auth" of type
 "key-auth" is not supported for scope "models"
 ```
 
-`key-auth` (and presumably other credential-verification policy types —
-**not confirmed, see caveat below**) has a server-enforced allowed-scope
-list, and `"models"` isn't on it for `key-auth`. The working mechanism is
-`global: true` on the policy itself, with **no** `policies:` entry on the
-model. A global policy is enforced across the *entire* control plane, not
-just one model. In this repo that has the same practical effect as gating
-`claude-chat` specifically, because `claude-chat` is currently the only
-model on `claude-ai-gateway` — but it means a future module that adds a
-second model to this same control plane would, by default, also be gated
-by this policy. That's a real design difference from what the model's
-`policies:` field name suggests it should do, and from how the brief
-described the OIDC module (Task 4) attaching auth the same way. **Whether
-`openid-connect` (or other policy types) share this "models"-scope
-restriction was not tested in this module** — confirm it directly via
-`kongctl explain ai_gateways.policies --extended` and a real apply before
-assuming either way for a future OIDC module; don't propagate this
-finding as gospel beyond `key-auth` itself.
+**What was incomplete:** stopping at that 400 and concluding key-auth can
+*only* be `global: true` — without checking whether `key-auth` could be
+declared as an `identity_providers` entry instead of a `policies` entry.
+It can. Confirmed via `kongctl explain ai_gateways.identity_providers
+--extended`:
+
+```
+- type: string required allowed: key-auth|openid-connect
+```
+
+`identity_providers` is a resource kind of its own
+(`ai_gateway_identity_providers[]`), separate from `policies`
+(`ai_gateway_policies[]`) — module 3's original investigation had already
+found this for `openid-connect` and even noted in passing that "`key-auth`
+can ALSO be modeled as an identity provider," but that observation was
+never acted on here. Models have a dedicated `access.identity_providers:
+array[string]` field for attaching entries of *either* type
+(`kongctl explain ai_gateways.models --extended`), independent of the
+model's separate `policies: array[string]` field that rejects `key-auth`.
+
+**The corrected framing:** key-auth and OpenID Connect are consistent, not
+different, once modeled the right way. Both are `identity_providers`
+resources; both attach to a model via `access.identity_providers`; both
+scope per-model. The only thing that is genuinely global-only is
+`key-auth` declared under `policies:` — a real, distinct attachment path
+that this module simply doesn't use.
+
+## `identity_providers`, `type: key-auth` — the config shape
+
+Confirmed via `kongctl explain ai_gateways.identity_providers --extended`.
+The full `config` field list is shared across both `type` values (fields
+not relevant to the chosen type are simply unused):
+
+```
+- config: object required
+  - hide_credentials: boolean optional
+  - key_in_body: boolean optional
+  - key_in_header: boolean optional
+  - key_in_query: boolean optional
+  - key_names: array[string] optional
+  - auth_methods: array[string] optional          (openid-connect)
+  - cache_tokens_salt: string optional             (openid-connect)
+  - client_id: array[string] optional              (openid-connect)
+  - client_secret: array[string] optional          (openid-connect)
+  - consumer_claims: array[array[string]] optional (openid-connect)
+  - consumer_optional: boolean optional            (openid-connect)
+  - issuer: string optional                        (openid-connect)
+  - scopes: array[string] optional                 (openid-connect)
+  - ssl_verify: boolean optional                   (openid-connect)
+```
+
+For `type: key-auth`, only `key_names` and `hide_credentials` are set —
+the same two fields the earlier `policies:`-based version used. The
+credential-verification config itself didn't change; only where it's
+declared (`identity_providers` instead of `policies`) and how it attaches
+(`access.identity_providers` on the model instead of `global: true` on the
+policy) changed.
+
+**Credential storage — confirmed unchanged, not a new mechanism.**
+Neither the `identity_providers` schema nor the `consumers`/`credentials`
+schema has any field linking a credential to a specific identity provider
+(no `identity_provider`/`identity_provider_ref` anywhere, confirmed via
+`kongctl explain ai_gateways.identity_providers --extended`, `kongctl
+explain ai_gateways.consumers --extended`, and `kongctl explain
+ai_gateways.consumers.credentials --extended`). Credentials still live on
+the `ai_gateway_consumers[].credentials[]` resource, same as the original
+`policies`-based design — switching the *attachment* mechanism did not
+introduce or remove a credential-storage mechanism.
+
+## Why `diff`, not `apply`, this pass
+
+The live control plane this repo has been testing against
+(`kong-claude-ai-gateway-2-0` in the Fel Tech org) already has modules 4/5/7's
+real policies (`team-model-listing`, `claude-token-rate-limit`,
+`claude-otel-tracing`) attached to `claude-chat`, applied by earlier tasks
+in this branch. A `kongctl diff` against a test file that redeclares
+`claude-chat` WITHOUT those policies' `policies:` list showed them going
+to `null` — i.e., re-applying an earlier module's file over a
+later-mutated live model would wipe policies added by later modules,
+because `kongctl apply` fully replaces a redeclared resource's own list
+fields (`model.policies`, `model.access.identity_providers`) with
+whatever the file says, even though it does NOT delete *separate*
+top-level resources (like an unreferenced `identity_providers` or
+`policies` entry) that the file omits entirely. This is a real,
+newly-observed nuance in kongctl's replace-vs-omit behavior, worth
+flagging for whoever next tests against this shared control plane.
+
+Given that, this pass validated the corrected `key-auth` schema and
+attachment path via `kongctl diff` only — which round-trips through the
+real Konnect API and surfaces the same 400s/validation errors an `apply`
+would — rather than running a mutating `apply` that could have stripped
+modules 4/5/7's live policies from the shared control plane. The plan
+`kongctl diff` produced for the corrected design:
+
+```
++ [1:c:ai_gateway_identity_provider:claude-key-auth-idp] ai_gateway_identity_provider "claude-key-auth-idp" will be created
+  name: "claude-key-auth-idp"
+  type: "key-auth"
+  display_name: "Claude Key Auth (identity provider)"
+  config:
+    hide_credentials: true
+    key_names:
+      [0]: "x-api-key"
+
+~ [2:u:ai_gateway_model:claude-chat] ai_gateway_model "claude-chat" will be updated
+  access: map[identity_providers:[okta-oidc]] → map[identity_providers:[claude-key-auth-idp]]
+```
+
+Zero validation error on the `identity_providers` creation or the model
+update — confirming the corrected schema and attachment path both work
+against the real API. (The `access:` diff line shows the swap from the
+live control plane's *current* state, which already has module 3's
+`okta-oidc` attached from an earlier task — not a design claim about this
+module's own starting point, which in a fresh build starts with no
+`access.identity_providers` at all.)
 
 ## The credential-value gap
 
@@ -102,10 +202,9 @@ Konnect auto-generate the key. Worse for testability: **the generated key
 is only ever returned in the create response** — confirmed live by `GET`
 on both the credential list and the credential-by-id endpoints after
 creation, neither of which include the key value in their response body.
-`kongctl apply`'s own terminal output doesn't surface it either (checked
-the actual apply output from this session — only metadata fields are
-printed). So once `kongctl apply` has run, the key is genuinely gone from
-this side unless you captured it some other way at creation time.
+`kongctl apply`'s own terminal output doesn't surface it either. So once
+`kongctl apply` has run, the key is genuinely gone from this side unless
+you captured it some other way at creation time.
 
 **For a future Docker-enabled run that needs a known, testable key**,
 create the credential directly against the Konnect API instead of (or in
@@ -131,17 +230,18 @@ credential for testing, separate from the declaratively-managed
 
 ## `kongctl explain`/live-schema corrections vs. the task brief
 
-Confirmed via `kongctl explain ai_gateways.policies --extended`, `kongctl
-explain ai_gateways.consumers --extended`, `kongctl explain
+Confirmed via `kongctl explain ai_gateways.identity_providers --extended`,
+`kongctl explain ai_gateways.policies --extended`, `kongctl explain
+ai_gateways.consumers --extended`, `kongctl explain
 ai_gateways.consumers.credentials --extended`, `kongctl explain
-ai_gateways.models --extended`, the Konnect MCP tool's
-`create_ai_gateway_policy`/`create_ai_gateway_consumer`/
-`create_ai_gateway_consumer_credential` input+output schemas, and a real
-`kongctl apply` 400:
+ai_gateways.models --extended`, and real `kongctl diff`/`apply` calls
+(both the original `policies:` 400 and this correction's clean
+`identity_providers` plan):
 
-1. **`key-auth` cannot be attached via a model's `policies:` list** — see
-   "the big finding" above. `global: true` on the policy is the mechanism
-   that actually works.
+1. **`key-auth` cannot be attached via a model's `policies:` list** — real,
+   confirmed, unchanged by this correction. `identity_providers` +
+   `access.identity_providers` is the corrected, working, per-model
+   mechanism — see "The correction" above.
 2. **`ai_gateways.consumers[].key_auth_credentials:`** (the brief's field
    name) **doesn't exist.** The real field is `credentials:` — see "the
    credential-value gap" above for the full divergence, including that no
@@ -149,13 +249,13 @@ ai_gateways.models --extended`, the Konnect MCP tool's
 3. **Consumer/credential `type` is `api-key`**, not a made-up
    `key-auth`-shaped value (confirmed via the Konnect API's
    `create_ai_gateway_consumer` output schema: `type: enum ["api-key",
-   "oauth"]`). The policy's `type: key-auth` (the Kong 3 plugin-name
-   equivalent) and the consumer/credential's `type: api-key` are two
-   independent fields that happen to look similar.
+   "oauth"]`). The identity provider's `type: key-auth` (the Kong 3
+   plugin-name equivalent) and the consumer/credential's `type: api-key`
+   are two independent fields that happen to look similar.
 4. **No `_external`/`selector` field on `ai_gateways`** (same finding as
    module 1) — this file re-declares the same `ai_gateway` so `kongctl`
    matches the live control plane by namespace+ref.
-5. **`hide_credentials`** was left `true` (the safer default, matching
+5. **`hide_credentials`** is left `true` (the safer default, matching
    1.x's implicit `key-auth` default) rather than the brief's literal
    `false` — the brief's own note said to keep it `true` "unless live
    testing shows a reason not to," and no live testing was possible here
@@ -173,53 +273,17 @@ kongctl apply -f kong-2.0/02-key-auth.yaml \
   --pat "${KONGCTL_DEFAULT_KONNECT_PAT}" --auto-approve
 ```
 
-**Real output from this session** (first attempt, before the `global:
-true` fix — kept here because the failure IS the finding):
-
-```
-[4/4] [namespace: kong-claude-ai-gateway-2-0] Updating ai_gateway_model: claude-chat... ✗ Error:
-failed to update AI Gateway model ai_gateway_model "claude-chat" in namespace "kong-claude-ai-gateway-2-0":
-{"status":400,"title":"Bad Request", ...
-"detail":"Bad Request: ai_gateway_model.policies: policy \"claude-key-auth\" of type \"key-auth\" is not
-supported for scope \"models\""}
-```
-
-**After the fix** (policy `global: true`, no `policies:` on the model):
-
-```
-RESOURCE CHANGES
-Namespace: kong-claude-ai-gateway-2-0 (1 changes: 1 update)
-  ai_gateway_policy (1 resources): ~ claude-key-auth
-[1/1] Updating ai_gateway_policy: claude-key-auth... ✓
-Executed 1 changes.
-```
-
-(The first partial apply had already created `claude-key-auth`,
-`claude-desktop`, and `claude-desktop-api-key` before the model-update step
-failed — this second apply only needed to flip `global` on the
-already-created policy.)
-
-A following `kongctl diff`: `No changes detected. Konnect is up to date.`
-
-**Confirmed live via the Konnect API**, not just the `kongctl` plan:
-
-```json
-// GET /v1/ai-gateways/{id}/policies
-{"name": "claude-key-auth", "type": "key-auth", "global": true, "enabled": true,
- "config": {"key_names": ["x-api-key"], "hide_credentials": true, "key_in_header": true,
-            "key_in_query": true, "key_in_body": false, ...}}
-
-// GET /v1/ai-gateways/{id}/consumers
-{"name": "claude-desktop", "type": "api-key", "policies": []}
-```
-
-Note `consumers[].policies` is `[]` (empty) — the consumer isn't linked to
-the policy explicitly either; `global: true` on the policy is what does
-the actual gating, consumer-independent. `GET
-.../consumers/{id}/credentials` and `GET
-.../consumers/{id}/credentials/{id}` were both checked and confirm the
-credential exists (`name`, `type`, `display_name`, timestamps) — with no
-`api_key` field in either response, per "the credential-value gap" above.
+Note for anyone applying this against the same shared Fel Tech control
+plane this repo has been testing against: if the live model already has
+module 3+'s policies/identity-providers attached (e.g. from an earlier
+task's real applies), applying THIS file alone will reset
+`access.identity_providers` to `[claude-key-auth]` only, dropping
+`okta-oidc` from the live model (though not deleting the `okta-oidc`
+identity provider record itself — see "Why `diff`, not `apply`" above).
+That's expected if you're intentionally walking the modules in order from
+a clean state; if you're re-testing against an already-advanced live
+control plane, apply `kong-2.0/07-opentelemetry.yaml` (the latest
+cumulative file) instead, or expect this diff.
 
 ## Live-verify reject/accept paths — NOT achievable here
 

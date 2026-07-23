@@ -4,13 +4,45 @@
 # `model_providers`/`models` block and, per this module's Step 1 brief note
 # and the confirmed 1.x precedent (`kong/03-oidc-okta.yaml` replaces its
 # module 2 key-auth plugin with `openid-connect` entirely, it does not run
-# both), REPLACES module 2's `claude-key-auth` global policy and the
-# `claude-desktop` consumer/credential with an `identity_providers` entry —
-# `claude-chat`'s `access.identity_providers` now points at `okta-oidc`
-# instead of relying on the control-plane-wide `claude-key-auth` policy.
+# both), REPLACES module 2's `claude-key-auth` identity provider and the
+# `claude-desktop` consumer/credential with a different `identity_providers`
+# entry — `claude-chat`'s `access.identity_providers` now points at
+# `okta-oidc` instead of `claude-key-auth`.
+#
+# ============================================================================
+# CORRECTION (2026-07-23): this is now a LITERAL, same-resource-kind swap,
+# not a cross-mechanism one.
+# ============================================================================
+#
+# When this file was originally written, module 2 modeled key-auth as a
+# `policies:`-attached `global: true` policy — a genuinely different
+# resource kind from this module's `identity_providers`-attached OIDC. That
+# made the "swap" described above impossible to express as a real
+# `kongctl`-tracked change: a global `policies:` entry and a model-scoped
+# `access.identity_providers` entry are two unrelated fields, so nothing in
+# this file's own YAML could ever cause the old policy to go away (see the
+# "does not delete" section below, which is still accurate for the general
+# apply-vs-sync behavior it documents).
+#
+# Module 2 has since been corrected to model key-auth as an
+# `identity_providers` entry too (`type: key-auth`, same resource kind as
+# this module's `type: openid-connect`), attached the same way — via
+# `claude-chat`'s `access.identity_providers`. That makes this module's
+# swap literal: this file's `access.identity_providers: [okta-oidc]`
+# (below) is a direct, same-field replacement of module 2's
+# `access.identity_providers: [claude-key-auth]`, exactly mirroring 1.x's
+# module 3 (which fully drops the `key-auth` plugin from its `plugins:`
+# list rather than running it alongside `openid-connect`). Re-declaring the
+# model with only `okta-oidc` in the list is what performs the swap on the
+# model's own gating — see "kongctl apply does not delete module 2's
+# *identity provider resource* itself" below for the one remaining nuance
+# (the OLD `claude-key-auth` identity provider record can still linger
+# server-side, but unlike the old global-policy leftover, an unreferenced
+# `identity_providers` entry gates nothing — it's inert, not a live
+# double-gate).
 #
 # CORRECTION to the brief's assumption that `kongctl apply` (described as
-# "sync semantics") would delete the now-unused `claude-key-auth` policy
+# "sync semantics") would delete the now-unused `claude-key-auth` resource
 # and `claude-desktop` consumer/credential: confirmed live via `kongctl
 # apply --help` / `kongctl sync --help` that this is NOT how kongctl works.
 # `apply` is explicitly create/update-only ("Never deletes resources" —
@@ -20,12 +52,19 @@
 # actually processes. Running `kongctl apply -f kong-2.0/03-oidc-okta.yaml`
 # (as this module's own "Apply it" section does) leaves module 2's
 # `claude-key-auth`/`claude-desktop`/`claude-desktop-api-key` resources
-# fully intact server-side — confirmed live, they were NOT removed by this
-# module's apply. To actually retire them (matching 1.x's module 3, which
-# does drop key-auth), a future `kongctl sync` run covering the whole
+# fully intact server-side — they are NOT removed by this module's apply.
+# To actually retire them, a future `kongctl sync` run covering the whole
 # `kong-2.0/` directory (not just this file) would be needed — out of
 # scope to run here since it would also need to safely handle every other
 # module's resources in the same pass. Document, don't silently assume.
+# **What DOES change, and matters more than the leftover record:** because
+# `claude-key-auth` is no longer referenced by ANY model's
+# `access.identity_providers` after this module's apply, it stops gating
+# anything — a live request only has to satisfy `okta-oidc` now, not both.
+# This is the fix for the double-gating class of problem the old
+# `policies`+`global: true` design had (see below) — an orphaned
+# `identity_providers` record sitting unused is harmless; an orphaned
+# `global: true` policy sitting active is not.
 #
 # THE CENTRAL FINDING OF THIS MODULE — the model-scope-vs-global question
 # module 2 explicitly left open (does `openid-connect` share `key-auth`'s
@@ -69,14 +108,18 @@
 #     anyway (`http://localhost:8010/anthropic`, this track's proxy
 #     port/route), since Okta itself still requires one even though Kong's
 #     `identity_providers` config has nowhere to declare it.
-#   - Net effect: `identity_providers`-based auth (this module) attaches
-#     PER-MODEL via `access.identity_providers`, unlike `policies`-based
-#     `key-auth` (module 2), which could only be applied `global: true`
-#     across the whole control plane. This module's `okta-oidc` identity
-#     provider is referenced ONLY from `claude-chat`'s
-#     `access.identity_providers` list — a future model added to this same
-#     `claude-ai-gateway` control plane would NOT automatically inherit
-#     this gating (the opposite of module 2's global-policy behavior).
+#   - Net effect: `identity_providers`-based auth attaches PER-MODEL via
+#     `access.identity_providers`, for BOTH `type: key-auth` (module 2,
+#     since corrected to use this same mechanism) and `type:
+#     openid-connect` (this module) — they are consistent, not different.
+#     The thing that's actually global-only is `key-auth` declared under
+#     `policies:` instead, a distinct (and, per module 2's correction, now
+#     unused) attachment path. This module's `okta-oidc` identity provider
+#     is referenced ONLY from `claude-chat`'s `access.identity_providers`
+#     list — a future model added to this same `claude-ai-gateway` control
+#     plane would NOT automatically inherit this gating, and neither would
+#     it automatically inherit module 2's `claude-key-auth` identity
+#     provider (both mechanisms are model-scoped now).
 #   - NOT independently re-tested here: whether `openid-connect` would also
 #     be rejected under `policies:` the way `key-auth` was under `models`
 #     scope in module 2 (the brief's warning that `policies:` "silently

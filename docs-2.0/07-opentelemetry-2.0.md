@@ -15,7 +15,11 @@
 > not just the apply's own success message.
 > ✅ **Attachment scope confirmed live: per-model, not forced-global.**
 > Same test pattern modules 2/4/5 used — `opentelemetry` does NOT share
-> `key-auth`'s global-only restriction.
+> `key-auth`'s `policies:`-attachment global-only restriction. (Note:
+> key-auth itself no longer uses that `policies:` path as of the
+> 2026-07-23 correction to `kong-2.0/02-key-auth.yaml` — it's modeled as a
+> per-model `identity_providers` entry now, same as `openid-connect`. See
+> that file's header for the full correction.)
 > ⚠️ **The core DP-level env vars are cited, secondhand evidence — NOT
 > independently verified here.** The shakeout's own `AIGW-2.0-ISSUES-RESOLVED.md`
 > (Issue 21) found that the `opentelemetry` policy's config alone exports
@@ -101,17 +105,21 @@ Attachment scope confirmed the same way modules 2/4/5 did — planned (via
 ```
 
 `global: false` planned with zero validation error — **`opentelemetry`
-does not share `key-auth`'s global-only restriction.** That throwaway
-plan run was deliberately never `apply`'d (its `team-model-listing` body
-was a dummy stand-in, not module 4's real Lua, and the plan also showed
-module 2's already-documented, unrelated `claude-key-auth` "will be
-deleted" — a pre-existing finding, see `kong-2.0/03-oidc-okta.yaml`'s
-header comment, not something this module re-litigates). The real,
-non-throwaway file below (which carries forward module 4/5's real policy
-bodies unchanged) was the one actually `diff`'d and `apply --auto-approve`'d
-against the live control plane, and a follow-up `GET` confirmed
-`claude-key-auth` was untouched — `kongctl apply` doesn't execute deletes,
-only `kongctl sync` does (module 3's finding).
+does not share `key-auth`'s `policies:`-attachment global-only
+restriction.** (Key-auth itself no longer uses that `policies:` path
+either as of the 2026-07-23 correction to `kong-2.0/02-key-auth.yaml` — it
+now uses a per-model `identity_providers` entry, same mechanism as
+`openid-connect`.) That throwaway plan run was deliberately never
+`apply`'d (its `team-model-listing` body was a dummy stand-in, not module
+4's real Lua, and the plan also showed module 2's then-still-live
+`claude-key-auth` global `policies:` entry "will be deleted" — a
+pre-existing finding at the time, see `kong-2.0/03-oidc-okta.yaml`'s
+header comment). The real, non-throwaway file below (which carries
+forward module 4/5's real policy bodies unchanged) was the one actually
+`diff`'d and `apply --auto-approve`'d against the live control plane, and
+a follow-up `GET` confirmed `claude-key-auth` was untouched — `kongctl
+apply` doesn't execute deletes, only `kongctl sync` does (module 3's
+finding).
 
 Full investigation, including the exact schema JSON fields checked and the
 scope-test plan output, is in `kong-2.0/07-opentelemetry.yaml`'s header

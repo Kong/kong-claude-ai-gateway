@@ -112,8 +112,12 @@
 # --gateway-id ... -o json` confirmed `"global": false` server-side, and
 # `kongctl get ai-gateway models ... -o json` confirmed `claude-chat`'s
 # `policies` array contains it. **`pre-function` does NOT share
-# `key-auth`'s global-only restriction — it attaches per-model exactly
-# like the brief assumed, confirmed live.** The throwaway policy was
+# `key-auth`'s `policies:`-attachment global-only restriction — it attaches
+# per-model exactly like the brief assumed, confirmed live.** (As of the
+# 2026-07-23 correction to `kong-2.0/02-key-auth.yaml`, key-auth itself is
+# no longer modeled via `policies:` either — see that file's header for
+# why `identity_providers`+`type: key-auth` is the corrected, per-model
+# mechanism.) The throwaway policy was
 # removed by re-applying `claude-chat` with the real policy list below
 # (which replaces the test ref) and deleting the now-unreferenced test
 # policy directly via the Konnect API afterward.

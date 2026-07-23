@@ -48,7 +48,9 @@
 #
 # ============================================================================
 # ATTACHMENT SCOPE — per-model, confirmed live via `kongctl diff`, NOT
-# forced-global like `key-auth` (module 2).
+# forced-global like `policies:`-attached `key-auth` (module 2's original,
+# since-corrected design — module 2 now uses `identity_providers`, which is
+# per-model, see that file's header for the 2026-07-23 correction).
 # ============================================================================
 #
 # Tested the same way modules 2/4/5 did: planned (via `kongctl diff`, not
@@ -70,15 +72,19 @@
 #
 # `kongctl` planned `global: false` with zero validation error — same
 # result module 5 got for `ai-rate-limiting-advanced`. **`opentelemetry`
-# does NOT share `key-auth`'s global-only restriction — confirmed live
-# via a real plan against the real control plane, it attaches per-model
-# the way `pre-function`/`ai-rate-limiting-advanced` do and the way the
-# brief assumed.**
+# does NOT share `key-auth`'s `policies:`-attachment global-only
+# restriction — confirmed live via a real plan against the real control
+# plane, it attaches per-model the way `pre-function`/
+# `ai-rate-limiting-advanced` do and the way the brief assumed.** (As of
+# the 2026-07-23 correction to `kong-2.0/02-key-auth.yaml`, key-auth
+# itself no longer uses the `policies:` path either — it's modeled as an
+# `identity_providers` entry, which is per-model, same as this policy.)
 #
 # That same throwaway-policy dry run also independently reproduced
 # module 2/3's already-documented, unrelated finding: because this
-# throwaway file was a full re-declaration missing module 2's still-live
-# `claude-key-auth` global policy, the plan additionally showed
+# throwaway file was a full re-declaration missing module 2's then-still-
+# live `claude-key-auth` global `policies:` entry (module 2's original,
+# pre-correction design), the plan additionally showed
 # `- [3:d:ai_gateway_policy:claude-key-auth] ... will be deleted`. Per
 # `kong-2.0/03-oidc-okta.yaml`'s header comment (module 3's finding,
 # confirmed via `kongctl apply --help`/`kongctl sync --help`), `kongctl

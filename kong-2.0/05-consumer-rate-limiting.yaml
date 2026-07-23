@@ -73,8 +73,10 @@
 # useful cross-check that the shape is stable across environments/dates.
 #
 # ============================================================================
-# ATTACHMENT SCOPE — per-model, confirmed live, NOT the key-auth-style
-# forced-global restriction module 2 found.
+# ATTACHMENT SCOPE — per-model, confirmed live, NOT the `policies:`+
+# `key-auth` forced-global restriction module 2 originally found (module 2
+# has since been corrected to use `identity_providers` instead, which is
+# per-model — see that file's header).
 # ============================================================================
 #
 # Tested the same way modules 2-4 did: applied a throwaway
@@ -94,9 +96,11 @@
 # server-side for the new policy; `kongctl get ai-gateway models
 # --gateway-id "$GWID" -o json` confirmed `claude-chat`'s `policies` array
 # contains both refs. **`ai-rate-limiting-advanced` does NOT share
-# `key-auth`'s global-only restriction — confirmed live, it attaches
-# per-model exactly the way `pre-function` (module 4) does and the way
-# the brief assumed.** The throwaway policy was retired by re-applying
+# `key-auth`'s `policies:`-attachment global-only restriction — confirmed
+# live, it attaches per-model exactly the way `pre-function` (module 4)
+# does and the way the brief assumed.** (Key-auth itself no longer uses
+# that `policies:` path either as of the 2026-07-23 correction to
+# `kong-2.0/02-key-auth.yaml` — see that file's header.) The throwaway policy was retired by re-applying
 # `claude-chat` with the real policy list below (which replaces the test
 # ref) and deleting the now-unreferenced test policy directly via the API
 # afterward (`DELETE /v1/ai-gateways/{id}/policies/{id}` → `204`).

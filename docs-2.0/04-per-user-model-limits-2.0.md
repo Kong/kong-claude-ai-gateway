@@ -5,10 +5,15 @@
 > ✅ **Control-plane side fully live-verified.** `kongctl apply` created the
 > `team-model-listing` `ai_gateway_policy` (`type: pre-function`) and
 > attached it to the existing `claude-chat` model. A follow-up `kongctl
-> diff` shows zero drift on this module's own resources (the one remaining
-> planned delete is module 2's still-live `claude-key-auth`, unrelated to
-> this module — see `docs-2.0/03-oidc-okta-2.0.md`'s "does not delete"
-> section, same finding, not re-litigated here).
+> diff` shows zero drift on this module's own resources (at the time this
+> module ran, the one remaining planned delete was module 2's still-live
+> `claude-key-auth` global `policies:` entry, unrelated to this module —
+> see `docs-2.0/03-oidc-okta-2.0.md`'s "does not delete" section). **Note:**
+> module 2 has since (2026-07-23) been corrected to model key-auth via
+> `identity_providers` instead of a global `policies:` entry — see
+> `kong-2.0/02-key-auth.yaml`'s header. This module's own design (a
+> `pre-function` policy attached per-model) is unaffected by that
+> correction.
 > ⚠️ **This module's design is NOT the brief's literal 3-model draft.** The
 > brief proposed two new models (`claude-models-premium`,
 > `claude-models-standard`) sharing `claude-chat`'s exact
@@ -140,8 +145,10 @@ control-plane-wide):
 policies --gateway-id "$GWID" -o json` confirmed `"global": false`
 server-side; `kongctl get ai-gateway models ...` confirmed `claude-chat`'s
 `policies` array contains the ref. **`pre-function` does NOT share
-`key-auth`'s global-only restriction — confirmed live, it attaches
-per-model exactly the way the brief assumed.** The throwaway policy was
+`key-auth`'s `policies:`-attachment global-only restriction — confirmed
+live, it attaches per-model exactly the way the brief assumed.** (Key-auth
+itself no longer uses that `policies:` path either as of the 2026-07-23
+correction to `kong-2.0/02-key-auth.yaml` — see that file's header.) The throwaway policy was
 retired by re-applying `claude-chat` with the real policy list (which
 replaced the test ref during this module's real apply) and deleting the
 now-unreferenced test policy directly via the API afterward

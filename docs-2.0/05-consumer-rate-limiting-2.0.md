@@ -6,10 +6,13 @@
 > `claude-token-rate-limit` `ai_gateway_policy` (`type:
 > ai-rate-limiting-advanced`) and attached it to the existing `claude-chat`
 > model alongside module 4's `team-model-listing`. A following `kongctl
-> diff` shows zero drift on this module's own resources (the one
-> remaining planned delete is module 2's still-live `claude-key-auth`,
-> unrelated — see `docs-2.0/03-oidc-okta-2.0.md`, same finding, not
-> re-litigated here).
+> diff` shows zero drift on this module's own resources (at the time this
+> module ran, the one remaining planned delete was module 2's still-live
+> `claude-key-auth` global `policies:` entry, unrelated — see
+> `docs-2.0/03-oidc-okta-2.0.md`). **Note:** module 2 has since (2026-07-23)
+> been corrected to model key-auth via `identity_providers` instead of a
+> global `policies:` entry — see `kong-2.0/02-key-auth.yaml`'s header. This
+> module's own design is unaffected by that correction.
 > ✅ **Attachment scope confirmed live: per-model, NOT forced global.**
 > Same pattern as `pre-function` (module 4) — see "Attachment scope"
 > below for the throwaway-policy test and the raw server response.
@@ -80,9 +83,9 @@ live WONT-FIX collision bug and had to be redesigned from scratch).
 
 Tested the same way modules 2-4 did, since nothing in `kongctl explain`'s
 output settles whether a policy type is forced `global: true` (module 2's
-`key-auth` finding) or attaches cleanly per-model (module 4's
-`pre-function` finding) — this had to be checked live per-plugin-type,
-not assumed from one prior finding to the next.
+original `policies:`-attached `key-auth` finding) or attaches cleanly
+per-model (module 4's `pre-function` finding) — this had to be checked
+live per-plugin-type, not assumed from one prior finding to the next.
 
 Created a throwaway `ai-rate-limiting-advanced` policy directly via the
 API first (`claude-rate-limit-test`, minimal
@@ -94,7 +97,8 @@ window_size: 60}]}]}`, no `global` field set):
 ```
 
 `global: false` by default — the first signal this plugin type does not
-share `key-auth`'s forced-global restriction. Discovering `ai_gateway_model`
+share `key-auth`'s `policies:`-attachment forced-global restriction.
+Discovering `ai_gateway_model`
 has no `PATCH` verb (`Allow: DELETE, GET, PUT` only — a real 405 hit while
 probing this), the actual attachment test switched to the repo's normal
 `kongctl`-based workflow: a scratch copy of this module's YAML with a
@@ -121,9 +125,12 @@ the Konnect API afterward:
 {"name": "claude-chat", "policies": ["team-model-listing", "claude-token-rate-limit", "claude-rate-limit-scope-test"]}
 ```
 
-**`ai-rate-limiting-advanced` does NOT share `key-auth`'s global-only
-restriction — confirmed live, it attaches per-model exactly the way
-`pre-function` (module 4) does and the way the brief assumed.** The
+**`ai-rate-limiting-advanced` does NOT share `key-auth`'s
+`policies:`-attachment global-only restriction — confirmed live, it
+attaches per-model exactly the way `pre-function` (module 4) does and the
+way the brief assumed.** (Key-auth itself no longer uses that `policies:`
+path either as of the 2026-07-23 correction to `kong-2.0/02-key-auth.yaml`
+— see that file's header.) The
 throwaway scope-test policy was retired by re-applying `claude-chat` with
 this module's real policy list (which replaces the test ref during a real
 `kongctl apply`) and deleting the now-unreferenced test policy directly
