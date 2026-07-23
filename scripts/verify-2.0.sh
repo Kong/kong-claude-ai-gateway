@@ -134,6 +134,33 @@ case "$MODULE" in
     [[ "$standard_count" == "1" ]] || fail "expected 1 model for standard team, got ${standard_count}"
     pass "module 04 (2.0): standard team sees 1 model"
     ;;
+  05-consumer-rate-limiting)
+    # NOTE: this module's config shape diverges from the brief's Step 1
+    # draft in exactly one field — see kong-2.0/05-consumer-rate-limiting.yaml's
+    # header comment for the live schema pull
+    # (GET /ai-gateways/{id}/policies/schemas/ai-rate-limiting-advanced):
+    # `config.llm_format` is NOT a real field on this plugin at all
+    # (confirmed absent from the schema, grepped for zero matches) and was
+    # dropped; `identifier`/`strategy`/`policies[].window_type`/
+    # `policies[].limits[].limit`/`window_size` all matched the brief's
+    # draft as-is. The request shape below is unchanged from the brief.
+    #
+    # NOTE: OKTA_ACCESS_TOKEN must be a real Okta access token — same var
+    # module 03's case uses (see that case's comment for how to mint one).
+    # Every request here uses the SAME token, so all 20 requests count
+    # against the SAME `identifier: consumer` counter — that's the point.
+    :  "${OKTA_ACCESS_TOKEN:?Set OKTA_ACCESS_TOKEN}"
+    saw_429=false
+    for i in $(seq 1 20); do
+      status=$(curl -s -o /dev/null -w '%{http_code}' "${BASE_URL}/anthropic" \
+        -H "Authorization: Bearer ${OKTA_ACCESS_TOKEN}" \
+        -H 'content-type: application/json' -H 'anthropic-version: 2023-06-01' \
+        -d '{"model":"claude-chat","max_tokens":16,"messages":[{"role":"user","content":"say hi"}]}')
+      [[ "$status" == "429" ]] && saw_429=true && break
+    done
+    [[ "$saw_429" == "true" ]] || fail "expected at least one 429 within 20 requests, never saw one"
+    pass "module 05 (2.0): rate limit tripped within 20 requests"
+    ;;
   *)
     echo "No verify steps defined yet for module '$MODULE'" >&2
     exit 1
