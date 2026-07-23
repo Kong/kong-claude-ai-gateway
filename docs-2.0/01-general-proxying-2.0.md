@@ -31,6 +31,30 @@
 > a live re-test. **Re-run `scripts/verify-2.0.sh 01-general-proxying`
 > against a real hybrid data plane (§5 of `docs-2.0/00-prerequisites-2.0.md`)
 > before trusting this module end-to-end.**
+>
+> **KOKO-3852 — not triggered yet, but will be if later modules add a second
+> model:** the same `AIGW-2.0-JIRA-TRACKING.md` tracking file (issue 15,
+> bundled with issue 27 — same model→Route compile root cause) documents a
+> separate, real bug: two `ai_gateway_model`s that share the same
+> `(formats, capabilities)` pair compile onto the **same** Route entity,
+> with stacked `ai-proxy-advanced` plugin instances from both models on it.
+> Root cause confirmed by Kong Eng 2026-07-09 (`poc-chat-model` +
+> `poc-semantic-model`, both `openai`/`generate`, compiled to the same route
+> `8ae36805`). Kong has marked this **WONT-FIX (2026-07-10)** — no product
+> fix is coming; the sanctioned path is config-avoidance only ("don't
+> co-locate two models sharing (format,capability) on one route"). This
+> module declares exactly **one** model (`claude-chat`, `formats:
+> [anthropic]`, `capabilities: [generate]`), so KOKO-3852's collision
+> condition — a second model sharing that same `(formats, capabilities)`
+> shape — is not triggered here. It becomes directly relevant starting with
+> later modules (2 onward), which may add or reference additional
+> models/policies on this same `claude-ai-gateway` control plane: **any
+> future module that adds a second model with `formats: [anthropic]` +
+> `capabilities: [generate]` on this control plane will silently collide
+> onto `claude-chat`'s compiled route**, per Kong's own WONT-FIX stance.
+> Future modules must either avoid creating a second model with that exact
+> `(formats, capabilities)` shape, or explicitly document a workaround if
+> avoidance isn't possible for what they're trying to prove.
 
 ## What this adds
 
@@ -72,6 +96,17 @@ through to the placeholder `ai-gateway.upstream.local` upstream and DNS-
 fails — not a 4xx you'd immediately suspect as a config problem. This file
 leaves `config.model.alias` unset deliberately, and `scripts/verify-2.0.sh`
 and every curl example below send `"model": "claude-chat"`.
+
+**Payload logging (`config.logging.payloads: true`) — intentional parity
+with 1.x, not silent:** this model turns on full request/response body
+logging, same as the 1.x track's own `kong/01-general-proxying.yaml`
+(`ai-proxy-advanced`'s `logging: {log_payloads: true, log_statistics:
+true}`). For the same reason 1.x does it — this is a demo/reference build
+where proving the round trip actually worked and having full debugging
+visibility outweighs the concern — not a production posture. It does mean
+Kong logs full Claude Desktop prompts and model responses; don't carry
+this default forward into a production deployment without re-evaluating
+the data-sensitivity tradeoff.
 
 ## `kongctl explain`/live-schema corrections vs. the task brief
 

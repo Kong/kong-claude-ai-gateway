@@ -94,6 +94,17 @@ ai_gateways:
       route:
         paths:
         - /anthropic
+      # log_payloads: true is a deliberate parity choice with the 1.x
+      # track's own kong/01-general-proxying.yaml (`ai-proxy-advanced`'s
+      # `logging: {log_payloads: true, log_statistics: true}`), not an
+      # accidental carry-over — see confirmation in kong/01-general-proxying.yaml
+      # line ~30. This repo is a demo/reference build, not a production
+      # deployment: full request/response body logging is what lets module 1
+      # prove the chat round-trip actually happened and gives debugging
+      # visibility, the same reason 1.x turns it on. It means Kong logs full
+      # Claude Desktop prompts/responses — do not carry this default into a
+      # production config without re-evaluating the data-sensitivity
+      # tradeoff. See docs-2.0/01-general-proxying-2.0.md's "vs. 1.x" table.
       logging:
         payloads: true
     targets:
