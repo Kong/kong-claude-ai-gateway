@@ -92,7 +92,15 @@ seed_secret() {
 seed_secret "anthropic-api-key" "${ANTHROPIC_API_KEY:-}"
 seed_secret "aws-access-key-id" "${AWS_ACCESS_KEY_ID:-}"
 seed_secret "aws-secret-access-key" "${AWS_SECRET_ACCESS_KEY:-}"
+# Not vault-referenceable in any kong-2.0/*.yaml (module 1's finding: AI
+# proxy's `region` field is a literal, not a vault-ref target) — every
+# module hardcodes `region: us-east-1` instead. Kept/seeded anyway in case
+# a future module needs it; harmless if unused.
 seed_secret "aws-region" "${AWS_REGION:-}"
+seed_secret "okta-issuer" "${KONGCTL_OKTA_ISSUER:-}"
+seed_secret "okta-client-id" "${KONGCTL_OKTA_CLIENT_ID:-}"
+seed_secret "okta-client-secret" "${KONGCTL_OKTA_CLIENT_SECRET:-}"
+seed_secret "oidc-cache-tokens-salt" "${KONGCTL_OIDC_CACHE_TOKENS_SALT:-}"
 
 echo
 echo "==> Ensuring vault '${VAULT_NAME}' exists..."

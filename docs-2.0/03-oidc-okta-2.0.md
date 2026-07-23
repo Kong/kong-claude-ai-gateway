@@ -132,31 +132,19 @@ kongctl either (it also passes through literally in the plan output), but
 unlike the `env` tag, that's the *intended* behavior — it's resolved
 server-side by Kong at runtime, not by kongctl at apply time. This means
 the four Okta values have to be seeded into the `ai-vault` config store as
-secrets before `kongctl apply` produces a *working* identity provider —
-`scripts/00-bootstrap-konnect-2.0.sh` doesn't do this yet (out of this
-task's file scope), so seed them manually:
+secrets before `kongctl apply` produces a *working* identity provider.
+`scripts/00-bootstrap-konnect-2.0.sh` now seeds these automatically,
+the same way it already seeds `anthropic-api-key`/`aws-*` — just set
+`KONGCTL_OKTA_ISSUER`/`KONGCTL_OKTA_CLIENT_ID`/`KONGCTL_OKTA_CLIENT_SECRET`/
+`KONGCTL_OIDC_CACHE_TOKENS_SALT` in `.env.2.0` before running the script and
+it upserts `okta-issuer`/`okta-client-id`/`okta-client-secret`/
+`oidc-cache-tokens-salt` into the config store (idempotent — safe to re-run,
+never overwrites with an empty value).
 
-```bash
-GWID=<ai-gateway id>              # GET /v1/ai-gateways
-CSID=<config-store id>            # GET /v1/ai-gateways/$GWID/config-stores
-BASE="${KONNECT_AIGW2_BASE_URL:-https://us.api.konghq.tech}"
-
-for pair in \
-  "okta-issuer:${KONGCTL_OKTA_ISSUER}" \
-  "okta-client-id:${KONGCTL_OKTA_CLIENT_ID}" \
-  "okta-client-secret:${KONGCTL_OKTA_CLIENT_SECRET}" \
-  "oidc-cache-tokens-salt:${KONGCTL_OIDC_CACHE_TOKENS_SALT}"; do
-  key="${pair%%:*}"; value="${pair#*:}"
-  curl -s -X POST -H "Authorization: Bearer ${KONGCTL_DEFAULT_KONNECT_PAT}" \
-    -H 'content-type: application/json' \
-    "${BASE}/v1/ai-gateways/${GWID}/config-stores/${CSID}/secrets" \
-    -d "{\"key\":\"${key}\",\"value\":\"${value}\"}"
-done
-```
-
-(Note the field name is `key`, not `name` — a real `400` first pointed
-this out live: `property "name" is unsupported, key [required]: property
-"key" is missing`.)
+(Note the underlying API's field name is `key`, not `name` — a real `400`
+first pointed this out live: `property "name" is unsupported, key
+[required]: property "key" is missing`, which is why the bootstrap script's
+`seed_secret` helper posts `{"key": ..., "value": ...}`.)
 
 **2. `config.cache_tokens_salt` is required for `type: openid-connect`.**
 `kongctl explain ai_gateways.identity_providers --extended` lists this
