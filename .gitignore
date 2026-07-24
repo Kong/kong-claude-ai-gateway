@@ -1,6 +1,8 @@
 .env
+.env.2.0
 deck.env
 certs/
+certs-2.0/
 *.pem
 *.crt
 *.key

@@ -1,0 +1,135 @@
+# Module 1 (2.0 track): general Anthropic-format proxying.
+#
+# Mirrors kong/01-general-proxying.yaml's job (prove Kong can front Claude
+# traffic before anything else builds on top) but on AI Gateway 2.0's
+# ai_gateway_model resource: one model ("claude-chat"), two providers
+# (Anthropic direct + AWS Bedrock as an alternate target), reachable at
+# /anthropic on the 2.0 data plane.
+#
+# Deviations from the task brief's literal Step 1, all found live against
+# the real Konnect API/kongctl schema (`kongctl explain ai_gateways.models
+# --extended`, `kongctl explain ai_gateways.model_providers --output json`)
+# — see docs-2.0/01-general-proxying-2.0.md's "vs. the brief" note and
+# task-2-report.md for the full trail:
+#
+#   - No `_external`/`selector` field exists on the `ai_gateways` resource
+#     (confirmed via `kongctl explain ai_gateways` — no such field in the
+#     schema). To attach model_providers/models to the control plane Task 1
+#     already created, this file re-declares the same `ai_gateway` (ref
+#     `claude-ai-gateway`, same name/display_name/description/labels as
+#     kong-2.0/00-platform.yaml) with the new children nested underneath.
+#     kongctl matches the live resource by its stored namespace+ref labels
+#     regardless of which file declares it, so applying this file alone
+#     updates the existing control plane in place rather than creating a
+#     second one (verified live — see the report).
+#   - The models field is `targets`, not `target_models`.
+#   - Bedrock provider auth fields are `access_key_id` / `secret_access_key`
+#     (not `aws_access_key_id` / `aws_secret_access_key`), and there is no
+#     `aws_region` field on the provider's auth at all.
+#   - AWS region lives on the *target's* config (`targets[].config.region`),
+#     not the provider, and per the OpenAPI spec that field is NOT marked
+#     `x-referenceable` (unlike `access_key_id`/`secret_access_key`, which
+#     are) — so it's a literal value here, not a `{vault://...}` reference.
+#   - The Anthropic target config field for the API version is `version`,
+#     not `anthropic_version` (confirmed via
+#     `kongctl explain ai_gateways.models.targets.config --output json`).
+#   - There is no `bedrock_model_id` config field. A target's provider-side
+#     model identifier is its own `name` field (confirmed against the
+#     `se-poc-config-default`/AI-Gateway-2.0-shakeout reference configs,
+#     which use e.g. `name: us.anthropic.claude-sonnet-4-5-20250929-v1:0`
+#     directly as the target name for every real Bedrock Claude target).
+#   - `config.model.alias` is left unset. Per the shakeout reference
+#     config's own header comment and per Fel's glossary note on
+#     `model_alias`, an unset alias defaults to the model's own `name`
+#     ("claude-chat") — so `{"model": "claude-chat"}` is what a client must
+#     send, not a target's name and not a made-up alias string. Setting
+#     alias to a value that doesn't match what verify-2.0.sh/docs send would
+#     recreate the exact silent-fallthrough-to-placeholder-upstream bug the
+#     glossary warns about.
+
+_defaults:
+  kongctl:
+    namespace: kong-claude-ai-gateway-2-0
+
+ai_gateways:
+- ref: claude-ai-gateway
+  name: claude-ai-gateway
+  display_name: "Claude AI Gateway (2.0)"
+  description: "AI Gateway 2.0 control plane for kong-claude-ai-gateway"
+  labels:
+    repo: kong-claude-ai-gateway
+    track: "2.0"
+
+  model_providers:
+  - ref: anthropic-direct
+    name: anthropic-direct
+    display_name: "Anthropic (direct key)"
+    type: anthropic
+    config:
+      auth:
+        type: basic
+        headers:
+        - name: x-api-key
+          value: "{vault://ai-vault/anthropic-api-key}"
+
+  - ref: bedrock-claude
+    name: bedrock-claude
+    display_name: "AWS Bedrock (Claude)"
+    type: bedrock
+    config:
+      auth:
+        type: aws
+        access_key_id: "{vault://ai-vault/aws-access-key-id}"
+        secret_access_key: "{vault://ai-vault/aws-secret-access-key}"
+
+  models:
+  - ref: claude-chat
+    type: model
+    name: claude-chat
+    display_name: "Claude Chat"
+    enabled: true
+    formats:
+    - type: anthropic
+    config:
+      route:
+        paths:
+        - /anthropic
+      # log_payloads: true is a deliberate parity choice with the 1.x
+      # track's own kong/01-general-proxying.yaml (`ai-proxy-advanced`'s
+      # `logging: {log_payloads: true, log_statistics: true}`), not an
+      # accidental carry-over — see confirmation in kong/01-general-proxying.yaml
+      # line ~30. This repo is a demo/reference build, not a production
+      # deployment: full request/response body logging is what lets module 1
+      # prove the chat round-trip actually happened and gives debugging
+      # visibility, the same reason 1.x turns it on. It means Kong logs full
+      # Claude Desktop prompts/responses — do not carry this default into a
+      # production config without re-evaluating the data-sensitivity
+      # tradeoff. See docs-2.0/01-general-proxying-2.0.md's "vs. 1.x" table.
+      logging:
+        payloads: true
+    targets:
+    # Primary: Anthropic direct API. weight 100 == all live traffic by
+    # default.
+    - name: claude-sonnet-4-6
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+    # Alternate: AWS Bedrock's hosted Claude. `weight: 0` (the design
+    # spec's original intent — fully disabled by default) is REJECTED by
+    # the live API: `targets[].weight` has a hard `minimum: 1` (confirmed
+    # via a real `400 targets.1.weight [minimum]: number must be at least
+    # 1` on `kongctl apply`). `weight: 1` against Anthropic-direct's `100`
+    # is the closest achievable equivalent — Bedrock stays registered and
+    # gets ~1% of unweighted traffic rather than zero. See
+    # docs-2.0/01-general-proxying-2.0.md for how to flip this to primary
+    # for a real test and what was observed.
+    - name: us.anthropic.claude-sonnet-4-5-20250929-v1:0
+      provider: bedrock-claude
+      weight: 1
+      config:
+        type: bedrock
+        region: us-east-1
+    capabilities:
+    - generate

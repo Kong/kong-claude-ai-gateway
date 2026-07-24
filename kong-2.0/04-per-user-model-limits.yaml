@@ -1,0 +1,318 @@
+# Module 4 (2.0 track): Per-user model access limits, gated by an Okta
+# `team` claim, filtering the `GET /anthropic/v1/models` listing.
+#
+# THIS MODULE'S DESIGN DELIBERATELY DIVERGES FROM THE BRIEF'S STEP 1 DRAFT.
+# The brief proposed THREE models on this control plane, all sharing
+# `formats: [anthropic]` + `capabilities: [generate]`: the existing
+# `claude-chat` plus two new ones (`claude-models-premium`,
+# `claude-models-standard`), each gated onto `/anthropic/v1/models` by a
+# `route.headers.team` condition and a per-team `request-termination`
+# policy. That draft was NOT built as-is — it was investigated first and
+# found to walk straight into a real, live-confirmed, Kong-acknowledged
+# WONT-FIX bug. See both findings below.
+#
+# ============================================================================
+# FINDING 1 — THE KOKO-3852 ROUTE-COLLISION RISK IS REAL, and this module's
+# design avoids it entirely rather than documenting it as a blocker.
+# ============================================================================
+#
+# `docs-2.0/01-general-proxying-2.0.md`'s status banner already flags this
+# risk in the abstract (module 1 declares exactly one model, so it wasn't
+# triggered there): two `ai_gateway_model`s sharing the same
+# `(formats, capabilities)` pair compile onto the SAME Route entity in the
+# data plane, with stacked `ai-proxy-advanced` instances — confirmed by Kong
+# Eng 2026-07-09 against `poc-chat-model` + `poc-semantic-model` (both
+# `openai`/`generate`, compiled to route `8ae36805`), marked **WONT-FIX
+# 2026-07-10** (`AIGW-2.0-JIRA-TRACKING.md`, issue 15, bundled with issue 27
+# — same repo used by module 1's own citation:
+# `~/claude/projects/aigw2.0-test/AIGW-2.0-JIRA-TRACKING.md`). The brief's
+# literal 3-model draft has THREE models sharing `anthropic`/`generate`
+# (`claude-chat` + 2 new ones) — a direct hit of the collision condition,
+# twice over.
+#
+# This module re-tested the CP-side half of that claim live, since the
+# actual DP-compiled Route can't be inspected here (no Docker/DP — same
+# constraint as every prior module). Test performed: applied an isolated
+# throwaway model (`claude-collision-test`, `formats: [anthropic]`,
+# `capabilities: [generate]`, route `/anthropic/v1/models`) alongside the
+# real `claude-chat` (`formats: [anthropic]`, `capabilities: [generate]`,
+# route `/anthropic`) via `kongctl apply`, then fetched both back via
+# `kongctl get ai-gateway models --gateway-id ... -o json`. Result: the
+# Konnect API accepted the second model with ZERO validation error or
+# warning — both models exist side-by-side in the declarative config,
+# distinguished only by `config.route.paths`/`config.route.headers`. This
+# is the important, previously-untested half of the finding: **there is no
+# CP-side guard rail against creating the collision** — nothing in
+# `kongctl diff`/`apply` would ever catch it before a real DP compiles the
+# config and silently merges the two models onto one Route. The actual
+# route-compile collision itself was NOT independently re-observed here
+# (would require a live DP + `GET :8011/config`, same gap module 1
+# documented) — this module treats Kong Eng's 2026-07-09/07-10
+# confirmation + WONT-FIX status as authoritative rather than re-deriving
+# it, consistent with how module 1 already treats it. The throwaway test
+# model was deleted immediately after (`DELETE
+# .../ai-gateways/{id}/models/{id}`, confirmed `204`) — it is not part of
+# this module's shipped config.
+#
+# Conclusion: the brief's literal 3-model design is not safe to ship on
+# this build. This module's actual design (below) uses **zero** new models
+# sharing `claude-chat`'s `(formats, capabilities)` — in fact it adds no
+# new `ai_gateway_model` at all, sidestepping the collision class
+# entirely rather than needing a workaround for it.
+#
+# ============================================================================
+# FINDING 2 — the brief's Option 1 avoidance path (conditional routing
+# on the SAME model instead of new models) was checked and partially
+# confirmed, then not used as literally suggested.
+# ============================================================================
+#
+# `kongctl explain ai_gateways.models.config.route --extended` does not
+# expand `route`'s nested fields (it's typed as an opaque `map[string]`),
+# so the header-condition question couldn't be answered from `explain`
+# alone. Tested live instead: applied the same throwaway
+# `claude-collision-test` model above WITH `config.route.headers: {team:
+# [kong-premium]}` set. `kongctl diff` planned it, `kongctl apply` created
+# it with zero error, and `kongctl get ai-gateway models ... -o json`
+# echoed `route.headers.team: [kong-premium]` back from the server —
+# **`route.headers` is a real, working condition on `ai_gateway_model`,
+# confirmed live.** This IS the "clean fix" the brief's own investigation
+# instructions predicted might exist.
+#
+# However, `route.headers` conditions a model's ROUTE MATCH, not its
+# response body — using it as literally suggested (one model per team,
+# each on `/anthropic/v1/models` distinguished by a `team` header) still
+# requires two separate `ai_gateway_model`s, which reintroduces Finding 1's
+# exact collision (both would still share `anthropic`/`generate` with
+# `claude-chat`). So `route.headers` alone doesn't fully solve it — it
+# only solves "route to the right handler," not "avoid the second model."
+# This module goes one step further than the brief's Option 1 and avoids
+# needing a second model (or a header-conditioned route) at all: see
+# "What this module actually does" below.
+#
+# ============================================================================
+# FINDING 3 — the brief's `pre-function` policy TYPE and its per-model
+# (non-global) attachment were both live-verified, not assumed.
+# ============================================================================
+#
+# `kongctl explain ai_gateways.policies --extended` shows `type: string`
+# with no closed enum (unlike `identity_providers.type`, which module 3
+# found to be a closed `key-auth|openid-connect` enum) — the Konnect MCP
+# tool's `create_ai_gateway_policy` schema description confirms why:
+# `type` is "equivalent to the Kong 3 plugin name" generically, not a
+# fixed AI-Gateway-specific list. `pre-function` is a real, bundled Kong
+# Gateway plugin name, so nothing in the schema itself rules it out — but
+# that's not the same as confirming it WORKS the way module 2 needed
+# `key-auth` to and found it didn't (silently forced `global: true`).
+# Tested live instead: applied a throwaway `pre-function` policy
+# (`team-claim-header-test`, `config.rewrite: [...]`, no `global` field
+# set) attached via `claude-chat`'s `policies:` array (not `global: true`
+# control-plane-wide). `kongctl diff` planned `global: false` for it (not
+# forced to `true`); `kongctl apply` created the policy and updated
+# `claude-chat` with zero error; `kongctl get ai-gateway policies
+# --gateway-id ... -o json` confirmed `"global": false` server-side, and
+# `kongctl get ai-gateway models ... -o json` confirmed `claude-chat`'s
+# `policies` array contains it. **`pre-function` does NOT share
+# `key-auth`'s `policies:`-attachment global-only restriction — it attaches
+# per-model exactly like the brief assumed, confirmed live.** (As of the
+# 2026-07-23 correction to `kong-2.0/02-key-auth.yaml`, key-auth itself is
+# no longer modeled via `policies:` either — see that file's header for
+# why `identity_providers`+`type: key-auth` is the corrected, per-model
+# mechanism.) The throwaway policy was
+# removed by re-applying `claude-chat` with the real policy list below
+# (which replaces the test ref) and deleting the now-unreferenced test
+# policy directly via the Konnect API afterward.
+#
+# ============================================================================
+# What this module actually does (as a result of Findings 1-3)
+# ============================================================================
+#
+# `claude-chat`'s existing route (`paths: ["/anthropic"]`, prefix match)
+# already covers `GET /anthropic/v1/models` — no new route or model is
+# needed to reach that path at all. This module adds exactly ONE new
+# policy, `team-model-listing` (`type: pre-function`, model-scoped,
+# `global` unset/false, confirmed per Finding 3), attached to `claude-chat`
+# alongside its existing `access.identity_providers: [okta-oidc]` gate
+# (unchanged from module 3). The policy's Lua:
+#   1. Only acts when the incoming request path is exactly
+#      `/anthropic/v1/models` — every other path under `/anthropic`
+#      (i.e. real chat traffic) passes through untouched.
+#   2. Extracts the `team` claim from the bearer JWT (same
+#      `jwt_parser:new(token)` approach as the brief's Step 1 — this part
+#      of the brief's design was sound and is reused as-is).
+#   3. Returns a static, team-scoped models list directly via
+#      `kong.response.exit()` — `kong-premium` sees 2 models,
+#      `kong-standard` sees 1, anything else gets `403`.
+#
+# This produces the SAME observable behavior the brief's 3-model design
+# was going for (team-based model-list filtering on
+# `GET /anthropic/v1/models`), with zero new `ai_gateway_model`s, zero
+# `(formats, capabilities)` collision exposure, and no need for the
+# brief's `placeholder` target-model workaround (that concern is moot
+# here — there is no new model needing a target at all).
+#
+# NOT independently verified here (same hard constraint as every prior
+# module — no Docker, no serverless proxy URL, confirmed 4 times):
+#   - Real end-to-end team-based filtering with actual Okta tokens over
+#     HTTP. `scripts/verify-2.0.sh`'s new case is written for a future
+#     Docker-enabled run, not exercised now.
+#   - Plugin-priority ordering between `pre-function`'s early-exit and the
+#     `openid-connect` identity provider's own auth enforcement on the
+#     same model — i.e. whether `okta-oidc` auth is guaranteed to run
+#     BEFORE this policy's `kong.response.exit()` (so an unauthenticated
+#     caller gets a 401 from OIDC, not a team-filtered 200/403 from this
+#     policy first). `access.identity_providers` is a separate resource
+#     class from `policies` (module 3's finding), not a phase-ordered
+#     plugin the same way `pre-function` is, so their relative execution
+#     order is genuinely unknown without a live DP request trace. Document
+#     this as an open risk, not a confirmed-safe design.
+#
+# Carried over from modules 1-3 (same findings, not re-litigated here):
+#   namespace `kong-claude-ai-gateway-2-0`; no `_external`/`selector` on
+#   `ai_gateways` (full re-declaration so kongctl matches by
+#   namespace+ref); `${{ env "..." }}` does NOT expand under kongctl
+#   (module 3's Second Finding) — the `team` claim name used by this
+#   policy's Lua is therefore hardcoded directly in the script below
+#   rather than templated from `KONGCTL_TEAM_CLAIM_NAME`; that var (and
+#   `KONGCTL_TEAM_HEADER_NAME`, unused by this design — see
+#   `docs-2.0/04-per-user-model-limits-2.0.md`) are kept in
+#   `.env.2.0.example` purely as documentation of intent, not as values
+#   `kongctl apply` actually consumes.
+
+_defaults:
+  kongctl:
+    namespace: kong-claude-ai-gateway-2-0
+
+ai_gateways:
+- ref: claude-ai-gateway
+  name: claude-ai-gateway
+  display_name: "Claude AI Gateway (2.0)"
+  description: "AI Gateway 2.0 control plane for kong-claude-ai-gateway"
+  labels:
+    repo: kong-claude-ai-gateway
+    track: "2.0"
+
+  identity_providers:
+  - ref: okta-oidc
+    name: okta-oidc
+    display_name: "Okta OIDC"
+    type: openid-connect
+    config:
+      issuer: "{vault://ai-vault/okta-issuer}"
+      client_id:
+      - "{vault://ai-vault/okta-client-id}"
+      client_secret:
+      - "{vault://ai-vault/okta-client-secret}"
+      cache_tokens_salt: "{vault://ai-vault/oidc-cache-tokens-salt}"
+      auth_methods:
+      - authorization_code
+      - session
+      - bearer
+      ssl_verify: true
+
+  model_providers:
+  - ref: anthropic-direct
+    name: anthropic-direct
+    display_name: "Anthropic (direct key)"
+    type: anthropic
+    config:
+      auth:
+        type: basic
+        headers:
+        - name: x-api-key
+          value: "{vault://ai-vault/anthropic-api-key}"
+
+  - ref: bedrock-claude
+    name: bedrock-claude
+    display_name: "AWS Bedrock (Claude)"
+    type: bedrock
+    config:
+      auth:
+        type: aws
+        access_key_id: "{vault://ai-vault/aws-access-key-id}"
+        secret_access_key: "{vault://ai-vault/aws-secret-access-key}"
+
+  policies:
+  - ref: team-model-listing
+    name: team-model-listing
+    display_name: "Team-scoped model listing"
+    type: pre-function
+    enabled: true
+    config:
+      rewrite:
+      - |
+          -- Per-team static model listing for GET /anthropic/v1/models.
+          -- Every other path under /anthropic (real chat traffic) is a
+          -- no-op passthrough. Model-scoped (not global) — see this
+          -- file's header comment, Finding 3, for the live confirmation
+          -- that pre-function attaches per-model like this.
+          local jwt_parser = require "kong.plugins.jwt.jwt_parser"
+
+          local MODELS_PATH = "/anthropic/v1/models"
+          local CLAIM_NAME = "team"
+
+          local PREMIUM_BODY = '{"data":[{"type":"model","id":"claude-opus-4-8"},{"type":"model","id":"claude-sonnet-4-6"}],"has_more":false}'
+          local STANDARD_BODY = '{"data":[{"type":"model","id":"claude-sonnet-4-6"}],"has_more":false}'
+
+          if kong.request.get_path() ~= MODELS_PATH then
+            return
+          end
+
+          local authorization = kong.request.get_header("authorization")
+          if not authorization then
+            return kong.response.exit(401, { message = "missing bearer token" })
+          end
+
+          local token = authorization:match("^[Bb]earer%s+(.+)$")
+          if not token then
+            return kong.response.exit(401, { message = "malformed authorization header" })
+          end
+
+          local jwt = jwt_parser:new(token)
+          if not jwt or not jwt.claims then
+            return kong.response.exit(401, { message = "invalid token" })
+          end
+
+          local team = jwt.claims[CLAIM_NAME]
+
+          if team == "kong-premium" then
+            return kong.response.exit(200, PREMIUM_BODY, { ["Content-Type"] = "application/json" })
+          elseif team == "kong-standard" then
+            return kong.response.exit(200, STANDARD_BODY, { ["Content-Type"] = "application/json" })
+          end
+
+          return kong.response.exit(403, { message = "no recognized team claim for model listing" })
+
+  models:
+  - ref: claude-chat
+    type: model
+    name: claude-chat
+    display_name: "Claude Chat"
+    enabled: true
+    access:
+      identity_providers:
+      - okta-oidc
+    formats:
+    - type: anthropic
+    config:
+      route:
+        paths:
+        - /anthropic
+      logging:
+        payloads: true
+    targets:
+    - name: claude-sonnet-4-6
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+    - name: us.anthropic.claude-sonnet-4-5-20250929-v1:0
+      provider: bedrock-claude
+      weight: 1
+      config:
+        type: bedrock
+        region: us-east-1
+    capabilities:
+    - generate
+    policies:
+    - team-model-listing

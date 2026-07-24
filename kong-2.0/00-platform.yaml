@@ -1,0 +1,21 @@
+_defaults:
+  kongctl:
+    namespace: kong-claude-ai-gateway-2-0
+
+ai_gateways:
+- ref: claude-ai-gateway
+  display_name: "Claude AI Gateway (2.0)"
+  description: "AI Gateway 2.0 control plane for kong-claude-ai-gateway"
+  labels:
+    repo: kong-claude-ai-gateway
+    track: "2.0"
+
+# NOTE: the ai_gateway_vault ("ai-vault") that every later module's YAML
+# references via {vault://ai-vault/<key>} is deliberately NOT declared here.
+# There is no kongctl-managed way to create the backing Konnect config store
+# itself (only to reference one that already exists), so
+# scripts/00-bootstrap-konnect-2.0.sh provisions the config store, seeds its
+# secrets, and creates the vault entity directly against the Konnect API
+# after this file is applied — see that script for the exact calls. This
+# keeps vault provisioning idempotent and scriptable end-to-end instead of
+# a manual Konnect UI step.
