@@ -1,0 +1,16 @@
+# Local secrets — never commit real values. See secrets/README.md.
+.env
+secrets/*
+!secrets/.gitkeep
+!secrets/README.md
+
+# Data-plane client certs (hybrid mTLS)
+certs/
+*.pem
+*.crt
+*.key
+
+# kongctl / OS noise
+.kongctl/
+*.log
+.DS_Store

@@ -1,0 +1,40 @@
+# Step 1 — Deploy the gateway (hybrid).
+#
+# Declares the AI Gateway 2.0 control plane itself. "Hybrid" means the
+# control plane lives in Konnect (cloud) and the data plane runs wherever
+# you choose — self-hosted on your own infra, in your VPC, or on a laptop
+# for a POC — connected back to Konnect over mTLS. Nothing about this
+# resource is Claude-specific; the same control plane can front any
+# provider AI Gateway 2.0 supports.
+#
+# Every later file in this directory re-declares this same `ai_gateways`
+# entry (same ref/name/labels) and nests its own new resources underneath
+# it. kongctl matches the live control plane by namespace + ref regardless
+# of which file declares it, so applying file 2, 3, or 4 on its own updates
+# this control plane in place rather than creating a second one — the same
+# cumulative-file convention used by this repo's other kongctl track
+# (../kong-2.0/). `git diff` between files shows exactly what each step adds.
+#
+# Apply: kongctl apply -f 1-gateway.yaml
+# Verify: kongctl diff -f 1-gateway.yaml   (expect no drift after apply)
+
+_defaults:
+  kongctl:
+    namespace: kong-app-gateway-claude
+
+ai_gateways:
+- ref: claude-tiered-gateway
+  name: claude-tiered-gateway
+  display_name: "Claude Tiered Gateway"
+  description: "Kong AI Gateway 2.0 control plane fronting Claude for the kong-app-gateway-claude example"
+  labels:
+    repo: kong-app-gateway-claude
+    example: tiered-model-entitlement
+
+# Data plane bring-up (the other half of "hybrid") is not a kongctl
+# resource — it's a data-plane node registered against this control plane
+# and started wherever you host it (Docker, Kubernetes, bare metal). See
+# README.md, Step 1, for the exact sequence: generate a client cert in
+# Konnect (AI Gateway → this control plane → Data Plane Nodes), then start
+# the data plane pointed at this control plane's configuration/telemetry
+# endpoints (`kongctl get ai-gateways -o json` after applying this file).

@@ -1,0 +1,87 @@
+# Step 2 — Integration setup with Claude.
+#
+# Adds the model_providers Kong can reach Claude through, and one open
+# model ("claude-chat") that exposes them at a single route. No auth, no
+# rate limiting yet — this step only proves the gateway can proxy real
+# Claude traffic before anything else layers on top.
+#
+# Two providers, one model: clients call the same /anthropic route and get
+# Claude either way. weight controls the traffic split; targets stay
+# registered even at low weight so you can flip primary/secondary without
+# re-declaring the model.
+#   - anthropic-direct — Anthropic's own API, authenticated with your
+#     Anthropic API key.
+#   - bedrock-claude    — the same Claude models served through AWS
+#     Bedrock, authenticated with an AWS access key pair.
+#
+# Both credentials are {vault://claude-gateway-vault/<key>} references, not
+# literal values — see README.md, Step 3, for how claude-gateway-vault gets
+# provisioned and seeded. Nothing below this comment is safe to fill in
+# with a real secret; that's the point of the vault indirection.
+#
+# Apply: kongctl apply -f 2-claude-integration.yaml
+
+_defaults:
+  kongctl:
+    namespace: kong-app-gateway-claude
+
+ai_gateways:
+- ref: claude-tiered-gateway
+  name: claude-tiered-gateway
+  display_name: "Claude Tiered Gateway"
+  description: "Kong AI Gateway 2.0 control plane fronting Claude for the kong-app-gateway-claude example"
+  labels:
+    repo: kong-app-gateway-claude
+    example: tiered-model-entitlement
+
+  model_providers:
+  - ref: anthropic-direct
+    name: anthropic-direct
+    display_name: "Anthropic (direct key)"
+    type: anthropic
+    config:
+      auth:
+        type: basic
+        headers:
+        - name: x-api-key
+          value: "{vault://claude-gateway-vault/anthropic-api-key}"
+
+  - ref: bedrock-claude
+    name: bedrock-claude
+    display_name: "AWS Bedrock (Claude)"
+    type: bedrock
+    config:
+      auth:
+        type: aws
+        access_key_id: "{vault://claude-gateway-vault/aws-access-key-id}"
+        secret_access_key: "{vault://claude-gateway-vault/aws-secret-access-key}"
+
+  models:
+  - ref: claude-chat
+    type: model
+    name: claude-chat
+    display_name: "Claude Chat"
+    enabled: true
+    formats:
+    - type: anthropic
+    config:
+      route:
+        paths:
+        - /anthropic
+      logging:
+        payloads: true
+    targets:
+    - name: claude-sonnet-4-6
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+    - name: us.anthropic.claude-sonnet-4-5-20250929-v1:0
+      provider: bedrock-claude
+      weight: 1
+      config:
+        type: bedrock
+        region: us-east-1
+    capabilities:
+    - generate

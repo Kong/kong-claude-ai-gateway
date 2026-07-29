@@ -1,0 +1,72 @@
+_format_version: "3.0"
+_konnect:
+  control_plane_name: ${{ env "DECK_KONNECT_CONTROL_PLANE_NAME" }}
+services:
+- name: claude-chat
+  host: api.anthropic.com
+  port: 443
+  protocol: https
+  read_timeout: 600000
+  routes:
+  - name: claude-chat-route
+    paths:
+    - /anthropic
+  plugins:
+  - name: ai-prompt-guard
+    config:
+      genai_category: text/generation
+      llm_format: anthropic
+      # Regex only, no ML classifier — a request is blocked if the user's
+      # prompt matches any deny pattern, checked before ai-proxy-advanced
+      # ever calls Anthropic. Illustrative: blocks anything that looks like
+      # a 16-digit card number or a US SSN.
+      deny_patterns:
+      - '\b\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}\b'
+      - '\b\d{3}-\d{2}-\d{4}\b'
+  - name: ai-proxy-advanced
+    config:
+      genai_category: text/generation
+      llm_format: anthropic
+      response_streaming: allow
+      targets:
+      - route_type: llm/v1/chat
+        weight: 100
+        model:
+          provider: anthropic
+          options:
+            anthropic_version: "2023-06-01"
+        auth:
+          header_name: x-api-key
+          header_value: '{vault://anthropic-api-key/anthropic-api-key}'
+        logging:
+          log_payloads: true
+          log_statistics: true
+- name: claude-models
+  host: api.anthropic.com
+  path: /v1/models
+  port: 443
+  protocol: https
+  routes:
+  - name: claude-models-route
+    paths:
+    - /anthropic/v1/models
+  plugins:
+  - name: request-transformer-advanced
+    config:
+      replace:
+        headers:
+        - '{vault://anthropic-api-key/anthropic-api-key-header}'
+plugins:
+- name: key-auth
+  config:
+    key_names:
+    - x-api-key
+consumers:
+- username: claude-desktop
+  keyauth_credentials:
+  - key: ${{ env "DECK_CONSUMER_API_KEY" }}
+# vaults:
+# - name: konnect
+#   prefix: anthropic-api-key
+#   config:
+#     config_store_id: ${{ env "DECK_VAULT_CONFIG_STORE_ID" }}
