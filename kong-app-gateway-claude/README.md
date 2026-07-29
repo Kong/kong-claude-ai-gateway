@@ -106,14 +106,27 @@ through the steps below.
 ## Prerequisites
 
 - A Kong Konnect account with AI Gateway 2.0 enabled.
+- A Konnect **Personal Access Token** — top-right profile menu → *Personal
+  access tokens* → *Generate a Personal Access Token*, give it a name
+  (e.g. `claude-integration`) and expiration, then *Generate*. This is
+  what `kongctl` and any direct Konnect API calls authenticate with.
+
+  <p float="left">
+    <img src="images/step1-deploy/01-pat-menu.png" width="260" alt="Konnect profile menu, Personal access tokens" />
+    <img src="images/step1-deploy/02-pat-generate.png" width="380" alt="Generate a Personal Access Token dialog" />
+  </p>
+
 - [`kongctl`](https://developer.konghq.com/kongctl/) installed and
-  authenticated (`kongctl version` to confirm).
+  authenticated with that token (`export KONGCTL_DEFAULT_KONNECT_PAT=...`,
+  then `kongctl version` to confirm).
 - An Anthropic API key and/or AWS Bedrock credentials with Claude model
   access — whichever provider(s) you want to route to.
 - An Okta tenant (or any OIDC-compliant IdP) with admin access to create
   an app and assign users to groups.
 - `jq` and `curl` if you're seeding the vault via the API rather than the
   Konnect UI.
+- Docker, if you follow Step 1 below as written (self-managed data plane
+  run locally) — swap in whatever runtime fits your environment otherwise.
 
 ## Steps → files
 
@@ -134,13 +147,73 @@ that point, so `git diff` between files shows exactly what each step adds
 ### 1. Deploy the gateway (hybrid)
 
 `kongctl apply -f 1-gateway.yaml` creates the AI Gateway 2.0 control plane
-in Konnect. The data-plane half of "hybrid" isn't a `kongctl` resource:
-generate a client certificate in the Konnect UI (this control plane →
-Data Plane Nodes → New Data Plane Node), save it under `secrets/`
-(git-ignored, never commit it), and start a data plane pointed at the
-control plane's configuration/telemetry endpoints — the same pattern as
-this repo's `docker-compose.aigw2.yml`, adapted to wherever you're hosting
-it.
+in Konnect. Once applied, it shows up under **AI Gateway** in the Konnect
+UI:
+
+![AI Gateway created in Konnect](images/step1-deploy/03-ai-gateway-created.png)
+
+The data-plane half of "hybrid" isn't a `kongctl` resource — it's a
+separate connect step, and this is where Kong's deployment flexibility
+actually shows up. Open the gateway → **Data plane nodes** — empty at
+first — and click **Configure data plane**:
+
+![No data plane nodes connected yet](images/step1-deploy/04-dataplane-empty.png)
+
+You're asked *where* and *how* to run it:
+
+- **Where**: self-managed (anywhere you can run a container or binary —
+  on-prem, your own VPC, your laptop), serverless, or dedicated cloud
+  (fully Kong-hosted). Serverless and dedicated cloud were "coming soon"
+  at the time of writing — self-managed is available today and is what
+  this example uses.
+- **How**: Docker, a Linux binary, or Kubernetes — pick whatever matches
+  your platform team's existing deployment tooling.
+
+![Choose environment: self-managed, Docker](images/step1-deploy/05-choose-environment.png)
+
+For this example we're keeping it simple and running the data plane as a
+**Docker container on a local machine** — the same steps apply unchanged
+if you're targeting a Kubernetes cluster or a VM in your own cloud
+instead. Selecting *Docker* generates a ready-to-run `docker run` command
+pre-filled with this control plane's cluster endpoints and a short-lived
+mTLS client certificate — copy it and run it as-is. (Not screenshotted
+here on purpose: the generated command embeds your real control-plane
+hostname and a live client certificate, which shouldn't end up in a
+screenshot in a git repo. Shape of the command is below with the
+identifying values replaced.)
+
+```bash
+docker run -d \
+  -e "KONG_ROLE=data_plane" \
+  -e "KONG_DATABASE=off" \
+  -e "KONG_VITALS=off" \
+  -e "KONG_CLUSTER_MTLS=pki" \
+  -e "KONG_CLUSTER_CONTROL_PLANE=<control-plane-host>:443" \
+  -e "KONG_CLUSTER_SERVER_NAME=<control-plane-host>" \
+  -e "KONG_CLUSTER_TELEMETRY_ENDPOINT=<telemetry-host>:443" \
+  -e "KONG_CLUSTER_TELEMETRY_SERVER_NAME=<telemetry-host>" \
+  -e "KONG_CLUSTER_CERT=..." \
+  -e "KONG_CLUSTER_CERT_KEY=..." \
+  kong/kong-ai-gateway-dev:2.0.1-rc.4
+```
+
+By default the data plane exposes proxy traffic on `8000` (HTTP) and
+`8443` (HTTPS):
+
+```
+$ docker container ls | grep :8443
+09cdbd946618   kong/kong-ai-gateway-dev:2.0.1-rc.4   Up ...   0.0.0.0:8000->8000/tcp, 0.0.0.0:8443->8443/tcp   zealous_moore
+```
+
+Back in Konnect, the node shows up as **Connected** / **In sync** within a
+few seconds:
+
+![Data plane node connected](images/step1-deploy/06-dataplane-connected.png)
+
+If you'd rather not paste the generated cert/key inline, save them under
+`secrets/` (git-ignored, never commit them) and reference the files from
+your own `docker run`/compose setup instead — see this repo's
+`docker-compose.aigw2.yml` for that pattern.
 
 ### 2. Integration setup with Claude
 

@@ -29,7 +29,7 @@ ai_gateways:
   description: "Kong AI Gateway 2.0 control plane fronting Claude for the kong-app-gateway-claude example"
   labels:
     repo: kong-app-gateway-claude
-    example: tiered-model-entitlement
+    example: tiered-entitlement
 
 # Data plane bring-up (the other half of "hybrid") is not a kongctl
 # resource — it's a data-plane node registered against this control plane
