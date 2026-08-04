@@ -1,0 +1,694 @@
+{
+  "tiles": [
+    {
+      "id": "e3f9588a-71fd-4996-818f-33c93afe6eae",
+      "type": "chart",
+      "layout": {
+        "size": {
+          "cols": 2,
+          "rows": 1
+        },
+        "position": {
+          "col": 0,
+          "row": 0
+        }
+      },
+      "definition": {
+        "chart": {
+          "type": "single_value",
+          "chart_title": "Total cost ($)"
+        },
+        "query": {
+          "filters": [
+            {
+              "field": "ai_provider",
+              "operator": "not_empty"
+            },
+            {
+              "field": "ai_provider",
+              "value": [
+                "UNSPECIFIED"
+              ],
+              "operator": "not_in"
+            }
+          ],
+          "metrics": [
+            "cost"
+          ],
+          "datasource": "llm_usage",
+          "dimensions": []
+        }
+      }
+    },
+    {
+      "id": "9edab295-d705-403f-a612-59847420a195",
+      "type": "chart",
+      "layout": {
+        "size": {
+          "cols": 2,
+          "rows": 1
+        },
+        "position": {
+          "col": 2,
+          "row": 0
+        }
+      },
+      "definition": {
+        "chart": {
+          "type": "single_value",
+          "chart_title": "Total Tokens"
+        },
+        "query": {
+          "filters": [
+            {
+              "field": "ai_provider",
+              "operator": "not_empty"
+            },
+            {
+              "field": "ai_provider",
+              "value": [
+                "UNSPECIFIED"
+              ],
+              "operator": "not_in"
+            }
+          ],
+          "metrics": [
+            "total_tokens"
+          ],
+          "datasource": "llm_usage",
+          "dimensions": []
+        }
+      }
+    },
+    {
+      "id": "e5cc504e-c505-4f0b-8633-638a0e7b5833",
+      "type": "chart",
+      "layout": {
+        "size": {
+          "cols": 2,
+          "rows": 1
+        },
+        "position": {
+          "col": 4,
+          "row": 0
+        }
+      },
+      "definition": {
+        "chart": {
+          "type": "single_value",
+          "chart_title": "Total Claude Code requests"
+        },
+        "query": {
+          "filters": [
+            {
+              "field": "ai_provider",
+              "operator": "not_empty"
+            },
+            {
+              "field": "ai_provider",
+              "value": [
+                "UNSPECIFIED"
+              ],
+              "operator": "not_in"
+            }
+          ],
+          "metrics": [
+            "ai_request_count"
+          ],
+          "datasource": "llm_usage",
+          "dimensions": []
+        }
+      }
+    },
+    {
+      "id": "4ab1fb73-d60b-4f77-b915-a0c88d427263",
+      "type": "chart",
+      "layout": {
+        "size": {
+          "cols": 3,
+          "rows": 2
+        },
+        "position": {
+          "col": 0,
+          "row": 1
+        }
+      },
+      "definition": {
+        "chart": {
+          "type": "top_n",
+          "chart_title": "Top Claude Models by Usage"
+        },
+        "query": {
+          "limit": 10,
+          "filters": [],
+          "metrics": [
+            "total_tokens",
+            "ai_request_count"
+          ],
+          "datasource": "llm_usage",
+          "dimensions": [
+            "ai_request_model"
+          ]
+        }
+      }
+    },
+    {
+      "id": "e6c5fbe0-9dd2-46ac-af1c-3ba3af9ffd43",
+      "type": "chart",
+      "layout": {
+        "size": {
+          "cols": 3,
+          "rows": 2
+        },
+        "position": {
+          "col": 3,
+          "row": 1
+        }
+      },
+      "definition": {
+        "chart": {
+          "type": "timeseries_line",
+          "stacked": false,
+          "chart_title": "Model usage trend (top 5)"
+        },
+        "query": {
+          "limit": 5,
+          "filters": [
+            {
+              "field": "ai_provider",
+              "operator": "not_empty"
+            },
+            {
+              "field": "ai_provider",
+              "value": [
+                "UNSPECIFIED"
+              ],
+              "operator": "not_in"
+            }
+          ],
+          "metrics": [
+            "total_tokens"
+          ],
+          "datasource": "llm_usage",
+          "dimensions": [
+            "ai_request_model",
+            "time"
+          ]
+        }
+      }
+    },
+    {
+      "id": "fd14bf28-0cd2-409e-9a48-2cbbd7907409",
+      "type": "chart",
+      "layout": {
+        "size": {
+          "cols": 2,
+          "rows": 2
+        },
+        "position": {
+          "col": 0,
+          "row": 3
+        }
+      },
+      "definition": {
+        "chart": {
+          "type": "donut",
+          "chart_title": "Claude health check"
+        },
+        "query": {
+          "filters": [
+            {
+              "field": "gateway_service",
+              "operator": "not_empty"
+            },
+            {
+              "field": "ai_provider",
+              "operator": "not_empty"
+            },
+            {
+              "field": "ai_provider",
+              "value": [
+                "UNSPECIFIED"
+              ],
+              "operator": "not_in"
+            }
+          ],
+          "metrics": [
+            "ai_request_count"
+          ],
+          "datasource": "llm_usage",
+          "dimensions": [
+            "status_code_grouped"
+          ]
+        }
+      }
+    },
+    {
+      "id": "f26edaa8-56d5-49f8-8f04-ade9451c76ec",
+      "type": "chart",
+      "layout": {
+        "size": {
+          "cols": 2,
+          "rows": 2
+        },
+        "position": {
+          "col": 2,
+          "row": 3
+        }
+      },
+      "definition": {
+        "chart": {
+          "type": "donut",
+          "chart_title": "Claude provider usage"
+        },
+        "query": {
+          "filters": [
+            {
+              "field": "gateway_service",
+              "operator": "not_empty"
+            },
+            {
+              "field": "ai_provider",
+              "operator": "not_empty"
+            },
+            {
+              "field": "ai_provider",
+              "value": [
+                "UNSPECIFIED"
+              ],
+              "operator": "not_in"
+            }
+          ],
+          "metrics": [
+            "ai_request_count"
+          ],
+          "datasource": "llm_usage",
+          "dimensions": [
+            "ai_provider"
+          ]
+        }
+      }
+    },
+    {
+      "id": "d27037a3-7ace-49cc-affb-3b34a71ab9b1",
+      "type": "chart",
+      "layout": {
+        "size": {
+          "cols": 2,
+          "rows": 2
+        },
+        "position": {
+          "col": 4,
+          "row": 3
+        }
+      },
+      "definition": {
+        "chart": {
+          "type": "timeseries_bar",
+          "stacked": true,
+          "chart_title": "LLM latency (avg)"
+        },
+        "query": {
+          "filters": [
+            {
+              "field": "ai_request_model",
+              "operator": "not_empty"
+            },
+            {
+              "field": "ai_request_model",
+              "value": [
+                "UNSPECIFIED"
+              ],
+              "operator": "not_in"
+            }
+          ],
+          "metrics": [
+            "llm_latency_average"
+          ],
+          "datasource": "llm_usage",
+          "dimensions": [
+            "ai_request_model",
+            "time"
+          ]
+        }
+      }
+    },
+    {
+      "id": "2915e3f9-325b-457a-a84b-98105e4977e5",
+      "type": "chart",
+      "layout": {
+        "size": {
+          "cols": 3,
+          "rows": 2
+        },
+        "position": {
+          "col": 0,
+          "row": 5
+        }
+      },
+      "definition": {
+        "chart": {
+          "type": "top_n",
+          "chart_title": "Top Devs by usage"
+        },
+        "query": {
+          "filters": [
+            {
+              "field": "consumer",
+              "operator": "not_empty"
+            }
+          ],
+          "metrics": [
+            "ai_request_count",
+            "total_tokens",
+            "cost"
+          ],
+          "datasource": "llm_usage",
+          "dimensions": [
+            "consumer"
+          ]
+        }
+      }
+    },
+    {
+      "id": "2824bc2f-251e-4e12-9e64-6b9d46561fbb",
+      "type": "chart",
+      "layout": {
+        "size": {
+          "cols": 3,
+          "rows": 2
+        },
+        "position": {
+          "col": 3,
+          "row": 5
+        }
+      },
+      "definition": {
+        "chart": {
+          "type": "timeseries_line",
+          "stacked": false,
+          "chart_title": "Token usage by dev"
+        },
+        "query": {
+          "filters": [
+            {
+              "field": "ai_provider",
+              "operator": "not_empty"
+            },
+            {
+              "field": "ai_provider",
+              "value": [
+                "UNSPECIFIED"
+              ],
+              "operator": "not_in"
+            },
+            {
+              "field": "consumer",
+              "operator": "not_empty"
+            }
+          ],
+          "metrics": [
+            "total_tokens"
+          ],
+          "datasource": "llm_usage",
+          "dimensions": [
+            "consumer",
+            "time"
+          ]
+        }
+      }
+    },
+    {
+      "id": "05d6a0a0-fcca-4aa4-b04b-5e5b753565e2",
+      "type": "chart",
+      "layout": {
+        "size": {
+          "cols": 3,
+          "rows": 2
+        },
+        "position": {
+          "col": 0,
+          "row": 7
+        }
+      },
+      "definition": {
+        "chart": {
+          "type": "horizontal_bar",
+          "stacked": true,
+          "chart_title": "Token usage per dev per model"
+        },
+        "query": {
+          "filters": [
+            {
+              "field": "consumer",
+              "operator": "not_empty"
+            },
+            {
+              "field": "ai_provider",
+              "operator": "not_empty"
+            },
+            {
+              "field": "ai_provider",
+              "value": [
+                "UNSPECIFIED"
+              ],
+              "operator": "not_in"
+            }
+          ],
+          "metrics": [
+            "total_tokens"
+          ],
+          "datasource": "llm_usage",
+          "dimensions": [
+            "consumer",
+            "ai_request_model"
+          ]
+        }
+      }
+    },
+    {
+      "id": "c77e2ea9-6eef-4948-a57f-1e8199720522",
+      "type": "chart",
+      "layout": {
+        "size": {
+          "cols": 3,
+          "rows": 2
+        },
+        "position": {
+          "col": 3,
+          "row": 7
+        }
+      },
+      "definition": {
+        "chart": {
+          "type": "horizontal_bar",
+          "stacked": true,
+          "chart_title": "Cost per dev per model ($)"
+        },
+        "query": {
+          "filters": [
+            {
+              "field": "consumer",
+              "operator": "not_empty"
+            },
+            {
+              "field": "ai_provider",
+              "operator": "not_empty"
+            },
+            {
+              "field": "ai_provider",
+              "value": [
+                "UNSPECIFIED"
+              ],
+              "operator": "not_in"
+            }
+          ],
+          "metrics": [
+            "cost"
+          ],
+          "datasource": "llm_usage",
+          "dimensions": [
+            "consumer",
+            "ai_request_model"
+          ]
+        }
+      }
+    },
+    {
+      "id": "5f88c24b-80de-4fe1-8948-ef0bde29f948",
+      "type": "chart",
+      "layout": {
+        "size": {
+          "cols": 3,
+          "rows": 2
+        },
+        "position": {
+          "col": 0,
+          "row": 9
+        }
+      },
+      "definition": {
+        "chart": {
+          "type": "horizontal_bar",
+          "stacked": true,
+          "chart_title": "Claude model usage (requests)"
+        },
+        "query": {
+          "filters": [
+            {
+              "field": "ai_request_model",
+              "operator": "not_empty"
+            },
+            {
+              "field": "ai_request_model",
+              "value": [
+                "UNSPECIFIED"
+              ],
+              "operator": "not_in"
+            }
+          ],
+          "metrics": [
+            "ai_request_count"
+          ],
+          "datasource": "llm_usage",
+          "dimensions": [
+            "ai_request_model"
+          ]
+        }
+      }
+    },
+    {
+      "id": "702f6291-e02d-47eb-b38b-85438c643712",
+      "type": "chart",
+      "layout": {
+        "size": {
+          "cols": 3,
+          "rows": 2
+        },
+        "position": {
+          "col": 3,
+          "row": 9
+        }
+      },
+      "definition": {
+        "chart": {
+          "type": "vertical_bar",
+          "stacked": true,
+          "chart_title": "Claude model usage count (tokens)"
+        },
+        "query": {
+          "filters": [
+            {
+              "field": "ai_provider",
+              "operator": "not_empty"
+            },
+            {
+              "field": "ai_provider",
+              "value": [
+                "UNSPECIFIED"
+              ],
+              "operator": "not_in"
+            }
+          ],
+          "metrics": [
+            "total_tokens"
+          ],
+          "datasource": "llm_usage",
+          "dimensions": [
+            "ai_request_model"
+          ]
+        }
+      }
+    },
+    {
+      "id": "2242b427-2999-4cfe-b17e-9e4ca61be362",
+      "type": "chart",
+      "layout": {
+        "size": {
+          "cols": 2,
+          "rows": 2
+        },
+        "position": {
+          "col": 0,
+          "row": 11
+        }
+      },
+      "definition": {
+        "chart": {
+          "type": "vertical_bar",
+          "stacked": true,
+          "chart_title": "AI security report"
+        },
+        "query": {
+          "filters": [
+            {
+              "field": "status_code_grouped",
+              "value": [
+                "4XX"
+              ],
+              "operator": "in"
+            },
+            {
+              "field": "ai_provider",
+              "operator": "not_empty"
+            },
+            {
+              "field": "ai_provider",
+              "value": [
+                "UNSPECIFIED"
+              ],
+              "operator": "not_in"
+            }
+          ],
+          "metrics": [
+            "ai_request_count"
+          ],
+          "datasource": "llm_usage",
+          "dimensions": [
+            "route",
+            "status_code"
+          ]
+        }
+      }
+    },
+    {
+      "id": "df1b0486-2c04-430e-a8ff-7e26c7821bf7",
+      "type": "chart",
+      "layout": {
+        "size": {
+          "cols": 3,
+          "rows": 2
+        },
+        "position": {
+          "col": 2,
+          "row": 11
+        }
+      },
+      "definition": {
+        "chart": {
+          "type": "timeseries_bar",
+          "stacked": true,
+          "chart_title": "Monthly spend trends"
+        },
+        "query": {
+          "limit": 10,
+          "filters": [],
+          "metrics": [
+            "cost"
+          ],
+          "datasource": "llm_usage",
+          "dimensions": [
+            "ai_request_model",
+            "time"
+          ],
+          "time_range": {
+            "type": "relative",
+            "time_range": "30d"
+          },
+          "granularity": "daily"
+        }
+      }
+    }
+  ],
+  "preset_filters": []
+}

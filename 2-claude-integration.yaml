@@ -1,0 +1,513 @@
+# Step 2 — Integration setup with Claude.
+#
+# Adds the model_providers Kong can reach Claude through, and one
+# ai_gateway_model per Claude tier (Sonnet, Haiku, Opus), each exposed at
+# the same /anthropic route and disambiguated by the "model" the client
+# requests. No auth, no rate limiting yet — this step only proves the
+# gateway can proxy real Claude traffic before anything else layers on
+# top (see 4-rate-limiting-policy.yaml for the entitlement/tiering layer
+# this is designed to carry).
+#
+# One model per tier, not one model with many targets: targets under the
+# same ai_gateway_model are meant to be interchangeable (e.g. the same
+# model served by two providers for failover), not different model
+# capabilities. Sonnet/Haiku/Opus get their own model resource each so
+# they can carry independent access controls later.
+#
+# Each model's config.route.model.body.model must match the exact "model"
+# string the client sends in the request body — this is Kong's only way to
+# route /anthropic/v1/messages to the right ai_gateway_model. A mismatch
+# here doesn't reject the request cleanly; it fails routing entirely
+# (ai-model-selector logs "no model string found in configured source:
+# <path|body|headers>" and the request 503s with a misleading "name
+# resolution failed" DNS error, since Kong has no upstream target to
+# resolve). Confirmed live: Claude apps send "claude-haiku-4-5-20251001"
+# for background/lightweight calls (title generation etc.) separately from
+# the main chat model, so every tier the client can select needs its own
+# registered alias — this is why the Sonnet model below lists two aliases
+# (old and current model naming) rather than one.
+#
+# `body`, not `path_aliases`: an earlier version of this file used
+# `route.model.path_aliases`, which reads the model identifier from the
+# URL PATH, not the request body — real clients always send the model in
+# the JSON body, so path_aliases silently never matched anything and every
+# real inference call hit the "name resolution failed" 503 above. Root
+# cause confirmed via data-plane logs (`ai-model-selector: no model string
+# found in configured source: path`) and fixed by switching to `body`,
+# which is what actually reads the client's JSON `"model"` field.
+#
+#   - anthropic-direct — Anthropic's own API, authenticated with your
+#     Anthropic API key.
+#   - bedrock-claude    — the same Claude models served through AWS
+#     Bedrock, authenticated with an AWS access key pair. Not currently
+#     wired to any target below (see Status table in README) — add a
+#     second target on a model to use it for failover.
+#
+# Both credentials are {vault://claude-gateway-vault/<key>} references, not
+# literal values — see README.md, Step 3, for how claude-gateway-vault gets
+# provisioned and seeded. Nothing below this comment is safe to fill in
+# with a real secret; that's the point of the vault indirection.
+#
+# config.route.model is required in practice: leaving it unset makes
+# kongctl (as of 1.8.0) synthesize a default shape the live Konnect API
+# rejects. Needs `kongctl` >= 1.8.0 — 1.6.0 hits a 400 on this field
+# regardless of what this file contains ("config.model [properties]:
+# property \"alias\" is unsupported").
+#
+# `body` was originally reported as rejected here (400: "property \"body\"
+# is unsupported"), which is why this file used `path_aliases` at first —
+# but that was against the `kong/kong-ai-gateway-dev:2.0.1-rc.4` data
+# plane. Against `2.0.1-rc.5`, `body` is accepted and is the only shape
+# that actually routes real client traffic (see the note above this
+# file's `models:` section) — `path_aliases` reads the URL path, which
+# never carries the model string for real requests. Re-verify against
+# `kongctl explain ai_gateway.models.config.route.model --extended` and a
+# live `kongctl diff` if you're on a different image version.
+#
+# Apply: kongctl apply -f 2-claude-integration.yaml
+
+_defaults:
+  kongctl:
+    namespace: kong-app-gateway-claude
+
+ai_gateways:
+- ref: claude-tiered-gateway
+  name: claude-tiered-gateway
+  display_name: "Claude Tiered Gateway"
+  description: "Kong AI Gateway 2.0 control plane fronting Claude for the kong-app-gateway-claude example"
+  labels:
+    repo: kong-app-gateway-claude
+    example: tiered-model-entitlement
+
+  model_providers:
+  - ref: anthropic-direct
+    name: anthropic-direct
+    display_name: "Anthropic (direct key)"
+    type: anthropic
+    config:
+      auth:
+        type: basic
+        headers:
+        - name: x-api-key
+          value: "{vault://claude-gateway-vault/anthropic-api-key}"
+
+  - ref: bedrock-claude
+    name: bedrock-claude
+    display_name: "AWS Bedrock (Claude)"
+    type: bedrock
+    config:
+      auth:
+        type: aws
+        access_key_id: "{vault://claude-gateway-vault/aws-access-key-id}"
+        secret_access_key: "{vault://claude-gateway-vault/aws-secret-access-key}"
+
+  models:
+  - ref: claude
+    type: model
+    name: claude
+    display_name: "Claude"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          # path_aliases is capped at 1 item by the live API (confirmed:
+          # a 2nd alias 400s with "maximum number of items is 1") — one
+          # ai_gateway_model can only ever match one model string. The
+          # gateway was originally set up (2026-07-29) with the
+          # "claude-sonnet-4-5" alias; current Sonnet clients send
+          # "claude-sonnet-5" instead, which is why claude-sonnet-5 below
+          # exists as its own sibling model rather than a second alias
+          # here — same target, same provider, just a distinct model
+          # resource so both names route correctly.
+          body:
+            model:
+            - claude-sonnet-4-5
+      model:
+        name_header: true
+    targets:
+    - name: claude-sonnet-5
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 5    # USD / million input tokens — placeholder, replace with current pricing
+        output_cost: 15   # USD / million output tokens — placeholder, replace with current pricing
+
+  - ref: claude-sonnet-5
+    type: model
+    name: claude-sonnet-5
+    display_name: "Claude Sonnet 5"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body:
+            model:
+            - claude-sonnet-5
+      model:
+        name_header: true
+    targets:
+    - name: claude-sonnet-5
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 5    # USD / million input tokens — placeholder, replace with current pricing
+        output_cost: 15   # USD / million output tokens — placeholder, replace with current pricing
+
+  - ref: claude-haiku
+    type: model
+    name: claude-haiku
+    display_name: "Claude Haiku"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body:
+            model:
+            - claude-haiku-4-5-20251001
+      model:
+        name_header: true
+      logging:
+        payloads: true
+    targets:
+    - name: claude-haiku-4-5-20251001
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 0.8    # USD / million input tokens — placeholder, replace with current pricing
+        output_cost: 4   # USD / million output tokens — placeholder, replace with current pricing
+
+  - ref: claude-opus
+    type: model
+    name: claude-opus
+    display_name: "Claude Opus"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body:
+            model:
+            - claude-opus-4-8
+      model:
+        name_header: true
+    targets:
+    - name: claude-opus-4-8
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 15    # USD / million input tokens — placeholder, replace with current pricing
+        output_cost: 75   # USD / million output tokens — placeholder, replace with current pricing
+
+  # Everything below was cross-checked against the live Anthropic model
+  # catalog (GET /anthropic/v1/models via the anthropic-models-endpoint
+  # passthrough listener, anthropic-version: 2023-06-01) rather than
+  # guessed — one ai_gateway_model per model id Anthropic actually
+  # returned that wasn't covered above yet.
+
+  - ref: claude-opus-5
+    type: model
+    name: claude-opus-5
+    display_name: "Claude Opus 5"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body:
+            model:
+            - claude-opus-5
+      model:
+        name_header: true
+    targets:
+    - name: claude-opus-5
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 15    # USD / million input tokens — placeholder, replace with current pricing
+        output_cost: 75   # USD / million output tokens — placeholder, replace with current pricing
+
+  - ref: claude-fable-5
+    type: model
+    name: claude-fable-5
+    display_name: "Claude Fable 5"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body:
+            model:
+            - claude-fable-5
+      model:
+        name_header: true
+    targets:
+    - name: claude-fable-5
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        # No pricing precedent for this model anywhere in this repo (unlike
+        # Opus/Sonnet/Haiku, which mirror 4-rate-limiting-policy.yaml's
+        # tiers) — priced provisionally at Opus-tier as a pure guess. Replace
+        # with real Anthropic pricing before this feeds any real budget.
+        input_cost: 15    # USD / million input tokens — placeholder, replace with current pricing
+        output_cost: 75   # USD / million output tokens — placeholder, replace with current pricing
+
+  - ref: claude-opus-4-7
+    type: model
+    name: claude-opus-4-7
+    display_name: "Claude Opus 4.7"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body:
+            model:
+            - claude-opus-4-7
+      model:
+        name_header: true
+    targets:
+    - name: claude-opus-4-7
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 15    # USD / million input tokens — placeholder, replace with current pricing
+        output_cost: 75   # USD / million output tokens — placeholder, replace with current pricing
+
+  - ref: claude-sonnet-4-6
+    type: model
+    name: claude-sonnet-4-6
+    display_name: "Claude Sonnet 4.6"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body:
+            model:
+            - claude-sonnet-4-6
+      model:
+        name_header: true
+    targets:
+    - name: claude-sonnet-4-6
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 5    # USD / million input tokens — placeholder, replace with current pricing
+        output_cost: 15   # USD / million output tokens — placeholder, replace with current pricing
+
+  - ref: claude-opus-4-6
+    type: model
+    name: claude-opus-4-6
+    display_name: "Claude Opus 4.6"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body:
+            model:
+            - claude-opus-4-6
+      model:
+        name_header: true
+    targets:
+    - name: claude-opus-4-6
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 15    # USD / million input tokens — placeholder, replace with current pricing
+        output_cost: 75   # USD / million output tokens — placeholder, replace with current pricing
+
+  - ref: claude-opus-4-5
+    type: model
+    name: claude-opus-4-5
+    display_name: "Claude Opus 4.5"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          # Dated id, exactly as returned by GET /v1/models — this
+          # release doesn't have an undated alias upstream.
+          body:
+            model:
+            - claude-opus-4-5-20251101
+      model:
+        name_header: true
+    targets:
+    - name: claude-opus-4-5-20251101
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 15    # USD / million input tokens — placeholder, replace with current pricing
+        output_cost: 75   # USD / million output tokens — placeholder, replace with current pricing
+
+  - ref: claude-sonnet-4-5-20250929
+    type: model
+    name: claude-sonnet-4-5-20250929
+    display_name: "Claude Sonnet 4.5 (dated)"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          # Distinct from the "claude" model's "claude-sonnet-4-5" alias
+          # above (the undated shorthand some older clients send) — this
+          # one matches the exact dated id Anthropic's API itself uses.
+          body:
+            model:
+            - claude-sonnet-4-5-20250929
+      model:
+        name_header: true
+    targets:
+    - name: claude-sonnet-4-5-20250929
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 5    # USD / million input tokens — placeholder, replace with current pricing
+        output_cost: 15   # USD / million output tokens — placeholder, replace with current pricing
+
+  - ref: claude-opus-4-1-20250805
+    type: model
+    name: claude-opus-4-1-20250805
+    display_name: "Claude Opus 4.1"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body:
+            model:
+            - claude-opus-4-1-20250805
+      model:
+        name_header: true
+    targets:
+    - name: claude-opus-4-1-20250805
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 15    # USD / million input tokens — placeholder, replace with current pricing
+        output_cost: 75   # USD / million output tokens — placeholder, replace with current pricing

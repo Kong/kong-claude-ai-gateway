@@ -1,11 +1,12 @@
 .env
-.env.2.0
-deck.env
+secrets/*
+!secrets/.gitkeep
+!secrets/README.md
 certs/
-certs-2.0/
 *.pem
 *.crt
 *.key
+.kongctl/
 .deck/
 *.log
 .DS_Store

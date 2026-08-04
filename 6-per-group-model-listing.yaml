@@ -1,0 +1,777 @@
+# Step 4 (continued) — per-group model access limits, mirroring
+# kong/04-per-user-model-limits.yaml's design onto AI Gateway 2.0.
+#
+# Numbered 6 (not 4) to avoid renumbering already-applied files — this is
+# still conceptually part of "Step 4: SSO", not a new pipeline stage. You
+# asked for group-based model *entitlement* here, not the cost-based
+# ai-rate-limiting-advanced budgets in 7-rate-limiting-policy.yaml (the
+# last step, applied after this one) — this file is that group-based
+# entitlement, implemented the way it actually works on this product.
+#
+# WHY THIS ISN'T "models.access.acls" (the mechanism the earlier
+# claude-key-tiered-ai-gateway.yaml example used) at the time this file
+# was written: `consumer_groups_claim` (identity_provider config ->
+# consumer_group) was believed unsupported. That finding was WRONG — see
+# 3-identity-provider.yaml's consumer_groups comment and
+# 7-rate-limiting-policy.yaml's header for the correction: it's a real,
+# live-confirmed field, just missing from kongctl's client schema. By the
+# time that was found, this file's mcp_servers-based design (below) was
+# already built, tested, and working, so it was kept as-is rather than
+# reworked onto `models.access.acls` retroactively — both mechanisms are
+# now real and valid; this file just predates the correction.
+#
+# THE MIRROR, mapped 1.x -> AI Gateway 2.0:
+#   1.x classic gateway                       | this file
+#   -------------------------------------------|--------------------------
+#   global pre-function (JWT -> Team header)   | global `pre-function` policy, same Lua
+#   service+route+headers match, per team      | mcp_server+route.headers match, per team
+#   request-termination plugin, per team       | `request-termination` policy, per team
+#   fallback route (no header condition)       | existing `anthropic-models-endpoint`
+#                                               |   mcp_server (already live, unconditioned)
+#
+# NOT MIRRORED / genuinely different:
+#   - 1.x's team routes lived on the SAME service as the real /v1/models
+#     proxy, ordered so Kong's router prefers the more specific
+#     (path+header) match. AI Gateway 2.0 has no equivalent "same service,
+#     multiple routes" concept for mcp_servers — each is its own top-level
+#     resource on the same `paths: [/anthropic/v1/models]`. Whether Kong's
+#     router prefers the header-matched mcp_servers over the unconditioned
+#     `anthropic-models-endpoint` the same deterministic way 1.x did is
+#     NOT independently verified here — same class of open question the
+#     kong-2.0/04-per-user-model-limits.yaml track flagged for its own
+#     design (see that file's header, "Known open risk"). Test this
+#     directly: a token with a recognized `team` claim should get the
+#     filtered list, not the real Anthropic catalog.
+#   - This does NOT touch actual chat completions — exactly like 1.x's
+#     module 4 doc says explicitly ("doesn't stop a standard-tier caller
+#     from still calling a premium model... that enforcement isn't built
+#     here"). Only `GET /anthropic/v1/models` is filtered.
+#   - `${{ env "..." }}` doesn't expand under kongctl (established by the
+#     kong-2.0 track already) — `team`/`Team` are hardcoded directly in
+#     the Lua below rather than templated from TEAM_CLAIM_NAME/
+#     TEAM_HEADER_NAME, matching their actual values in .env.
+#   - mcp_servers don't have a `(formats, capabilities)` pair the way
+#     `ai_gateway_model`s do, so the KOKO-3852 route-collision WONT-FIX bug
+#     the kong-2.0 track hit (two models sharing formats+capabilities
+#     silently merging onto one route) should not apply here — mcp_servers
+#     don't run ai-proxy-advanced at all. Not independently re-verified
+#     against a live data-plane route dump; treated as a reasonable
+#     inference from the schema (no formats/capabilities fields exist on
+#     ai_gateway_mcp_server), not a confirmed fact.
+#
+# Model-list bodies below are copied verbatim from
+# kong/04-per-user-model-limits.yaml (same JSON, same two tiers) rather
+# than re-derived, so both tracks show the identical catalog per team.
+#
+# Re-declares identity_providers/consumer_groups/model_providers/models
+# unchanged from 3-identity-provider.yaml, plus the two already-live
+# policies (`log`, `anthropic-add-key`) and the one already-live
+# mcp_server (`anthropic-models-endpoint`) verbatim — this file's
+# `policies:`/`mcp_servers:` keys make kongctl diff the FULL live set of
+# each type against what's declared, and anything not re-declared here
+# gets proposed for deletion (the same lesson learned the hard way earlier
+# in this repo's history with 3-identity-provider.yaml and its 12 models).
+#
+# Preview: kongctl diff -f 6-per-group-model-listing.yaml
+# Apply:   kongctl apply -f 6-per-group-model-listing.yaml
+
+_defaults:
+  kongctl:
+    namespace: kong-app-gateway-claude
+
+ai_gateways:
+- ref: claude-tiered-gateway
+  name: claude-tiered-gateway
+  display_name: "Claude Tiered Gateway"
+  description: "Kong AI Gateway 2.0 control plane fronting Claude for the kong-app-gateway-claude example"
+  labels:
+    repo: kong-app-gateway-claude
+    example: tiered-model-entitlement
+
+  identity_providers:
+  - ref: okta-groups-idp
+    name: okta-groups-idp
+    display_name: "Okta OIDC (group claim)"
+    type: openid-connect
+    config:
+      issuer: "{vault://claude-gateway-vault/okta-issuer}"
+      client_id:
+      - "{vault://claude-gateway-vault/okta-client-id}"
+      client_secret:
+      - "{vault://claude-gateway-vault/okta-client-secret}"
+      cache_tokens_salt: "{vault://claude-gateway-vault/oidc-cache-tokens-salt}"
+      # authorization_code + scopes synced from live (added via the Konnect
+      # UI's "Interactive sign-in" test flow, which needs the OAuth
+      # redirect grant, not just bearer-token validation) — kept here so
+      # kongctl apply doesn't revert them.
+      auth_methods:
+      - bearer
+      - authorization_code
+      scopes:
+      - openid
+      consumer_optional: true
+      ssl_verify: true
+      # consumer_groups_claim (team -> consumer_group) intentionally not
+      # declared here — kongctl can't manage it (not in its client
+      # schema) and always drops it on apply. See
+      # 3-identity-provider.yaml's consumer_groups comment for the full
+      # finding and the raw-API PUT needed to (re)set it after any
+      # `kongctl apply` that touches this identity provider, including
+      # this file.
+  consumer_groups:
+  - ref: tier-premium
+    name: kong-premium
+  - ref: tier-standard
+    name: kong-standard
+
+  model_providers:
+  - ref: anthropic-direct
+    name: anthropic-direct
+    display_name: "Anthropic (direct key)"
+    type: anthropic
+    config:
+      auth:
+        type: basic
+        headers:
+        - name: x-api-key
+          value: "{vault://claude-gateway-vault/anthropic-api-key}"
+
+  - ref: bedrock-claude
+    name: bedrock-claude
+    display_name: "AWS Bedrock (Claude)"
+    type: bedrock
+    config:
+      auth:
+        type: aws
+        access_key_id: "{vault://claude-gateway-vault/aws-access-key-id}"
+        secret_access_key: "{vault://claude-gateway-vault/aws-secret-access-key}"
+
+  policies:
+  # Already live, re-declared verbatim so this file's `policies:` key
+  # doesn't propose deleting them.
+  - ref: log
+    name: log
+    display_name: "log"
+    type: file-log
+    enabled: true
+    global: true
+    config:
+      path: /tmp/log.txt
+      reopen: true
+
+  - ref: anthropic-add-key
+    name: anthropic-add-key
+    display_name: "anthropic-add-key"
+    type: request-transformer-advanced
+    enabled: true
+    global: false
+    config:
+      add:
+        headers:
+        - "{vault://claude-gateway-vault/anthropic-api-key-header}"
+
+  # NEW — the claim-extraction half of the mirror. Global (like 1.x's
+  # top-level pre-function): route.headers matching on the mcp_servers
+  # below needs the Team header set before Kong picks a route, so this
+  # can't be scoped to just those two resources the way `anthropic-add-key`
+  # is scoped to one mcp_server. No-op for any request without a valid
+  # bearer JWT carrying a `team` claim — real chat traffic on `/anthropic`
+  # passes through unaffected, same safety property as the 1.x version.
+  - ref: team-claim-header
+    name: team-claim-header
+    display_name: "Team claim -> Team header"
+    type: pre-function
+    enabled: true
+    global: true
+    config:
+      rewrite:
+      - |
+          -- Mirrors kong/04-per-user-model-limits.yaml's global
+          -- pre-function, with one necessary deviation: that file's
+          -- `require "kong.plugins.jwt.jwt_parser"` is BLOCKED in AI
+          -- Gateway 2.0's untrusted-Lua sandbox ("not allowed within
+          -- sandbox" — confirmed live, and since this ran unconditionally
+          -- at the top of the script on a GLOBAL policy, it 500'd every
+          -- request through the whole gateway, not just model listing,
+          -- until fixed). Decodes the JWT payload manually instead —
+          -- base64url + cjson, both available in the sandbox (cjson.safe
+          -- is already used successfully in issue/claude_deck.yaml's
+          -- post-function). No signature verification is performed here,
+          -- same as jwt_parser:new() alone would give you without a
+          -- separate `jwt` plugin/verify step — this policy only decides
+          -- which model list to return, it doesn't authenticate the
+          -- caller (see this file's header comment on that gap).
+          --
+          -- Hardcoded claim/header names (team -> Team) rather than
+          -- templated from TEAM_CLAIM_NAME/TEAM_HEADER_NAME: `${{ env
+          -- "..." }}` does not expand under kongctl declarative config
+          -- (established in kong-2.0/04-per-user-model-limits.yaml's
+          -- header).
+          local cjson = require "cjson.safe"
+
+          local claim_name = "team"
+          local header_name = "Team"
+
+          -- Prevent a client-supplied header from affecting routing.
+          ngx.req.clear_header(header_name)
+
+          local authorization = kong.request.get_header("authorization")
+          if not authorization then
+            return
+          end
+
+          local token = authorization:match("^[Bb]earer%s+(.+)$")
+          if not token then
+            return
+          end
+
+          local payload_b64 = token:match("^[^.]+%.([^.]+)%.")
+          if not payload_b64 then
+            return
+          end
+
+          -- JWT uses unpadded base64url; ngx.decode_base64 wants standard
+          -- base64 with padding.
+          payload_b64 = payload_b64:gsub("-", "+"):gsub("_", "/")
+          local pad = #payload_b64 % 4
+          if pad > 0 then
+            payload_b64 = payload_b64 .. string.rep("=", 4 - pad)
+          end
+
+          local payload_json = ngx.decode_base64(payload_b64)
+          if not payload_json then
+            return
+          end
+
+          local claims = cjson.decode(payload_json)
+          if not claims then
+            return
+          end
+
+          local value = claims[claim_name]
+          if type(value) ~= "string" or value == "" then
+            return
+          end
+
+          ngx.req.set_header(header_name, value)
+
+  # NEW — the two request-termination halves of the mirror. Static,
+  # Anthropic-shaped /v1/models responses, copied verbatim from
+  # kong/04-per-user-model-limits.yaml (same two JSON bodies, same two
+  # tiers) so both tracks show the identical catalog per team.
+  - ref: claude-models-premium-list
+    name: claude-models-premium-list
+    display_name: "Premium team static model list"
+    type: request-termination
+    enabled: true
+    global: false
+    config:
+      status_code: 200
+      content_type: application/json
+      body: '{"data":[{"type":"model","id":"claude-sonnet-5","display_name":"Claude Sonnet 5","created_at":"2026-06-29T00:00:00Z","max_input_tokens":1000000,"max_tokens":128000,"capabilities":{"batch":{"supported":true},"citations":{"supported":true},"code_execution":{"supported":true},"context_management":{"supported":true,"clear_tool_uses_20250919":{"supported":true},"clear_thinking_20251015":{"supported":true},"compact_20260112":{"supported":true}},"effort":{"supported":true,"low":{"supported":true},"medium":{"supported":true},"high":{"supported":true},"xhigh":{"supported":true},"max":{"supported":true}},"image_input":{"supported":true},"pdf_input":{"supported":true},"structured_outputs":{"supported":true},"thinking":{"supported":true,"types":{"enabled":{"supported":false},"adaptive":{"supported":true}}}}},{"type":"model","id":"claude-fable-5","display_name":"Claude Fable 5","created_at":"2026-06-07T00:00:00Z","max_input_tokens":1000000,"max_tokens":128000,"capabilities":{"batch":{"supported":true},"citations":{"supported":true},"code_execution":{"supported":true},"context_management":{"supported":true,"clear_tool_uses_20250919":{"supported":true},"clear_thinking_20251015":{"supported":true},"compact_20260112":{"supported":true}},"effort":{"supported":true,"low":{"supported":true},"medium":{"supported":true},"high":{"supported":true},"xhigh":{"supported":true},"max":{"supported":true}},"image_input":{"supported":true},"pdf_input":{"supported":true},"structured_outputs":{"supported":true},"thinking":{"supported":true,"types":{"enabled":{"supported":false},"adaptive":{"supported":true}}}}},{"type":"model","id":"claude-opus-4-8","display_name":"Claude Opus 4.8","created_at":"2026-05-28T00:00:00Z","max_input_tokens":1000000,"max_tokens":128000,"capabilities":{"batch":{"supported":true},"citations":{"supported":true},"code_execution":{"supported":true},"context_management":{"supported":true,"clear_tool_uses_20250919":{"supported":true},"clear_thinking_20251015":{"supported":true},"compact_20260112":{"supported":true}},"effort":{"supported":true,"low":{"supported":true},"medium":{"supported":true},"high":{"supported":true},"xhigh":{"supported":true},"max":{"supported":true}},"image_input":{"supported":true},"pdf_input":{"supported":true},"structured_outputs":{"supported":true},"thinking":{"supported":true,"types":{"enabled":{"supported":false},"adaptive":{"supported":true}}}}},{"type":"model","id":"claude-opus-4-7","display_name":"Claude Opus 4.7","created_at":"2026-04-14T00:00:00Z","max_input_tokens":1000000,"max_tokens":128000,"capabilities":{"batch":{"supported":true},"citations":{"supported":true},"code_execution":{"supported":true},"context_management":{"supported":true,"clear_tool_uses_20250919":{"supported":true},"clear_thinking_20251015":{"supported":true},"compact_20260112":{"supported":true}},"effort":{"supported":true,"low":{"supported":true},"medium":{"supported":true},"high":{"supported":true},"xhigh":{"supported":true},"max":{"supported":true}},"image_input":{"supported":true},"pdf_input":{"supported":true},"structured_outputs":{"supported":true},"thinking":{"supported":true,"types":{"enabled":{"supported":false},"adaptive":{"supported":true}}}}},{"type":"model","id":"claude-sonnet-4-6","display_name":"Claude Sonnet 4.6","created_at":"2026-02-17T00:00:00Z","max_input_tokens":1000000,"max_tokens":128000,"capabilities":{"batch":{"supported":true},"citations":{"supported":true},"code_execution":{"supported":true},"context_management":{"supported":true,"clear_tool_uses_20250919":{"supported":true},"clear_thinking_20251015":{"supported":true},"compact_20260112":{"supported":true}},"effort":{"supported":true,"low":{"supported":true},"medium":{"supported":true},"high":{"supported":true},"xhigh":{"supported":false},"max":{"supported":true}},"image_input":{"supported":true},"pdf_input":{"supported":true},"structured_outputs":{"supported":true},"thinking":{"supported":true,"types":{"enabled":{"supported":true},"adaptive":{"supported":true}}}}},{"type":"model","id":"claude-opus-4-6","display_name":"Claude Opus 4.6","created_at":"2026-02-04T00:00:00Z","max_input_tokens":1000000,"max_tokens":128000,"capabilities":{"batch":{"supported":true},"citations":{"supported":true},"code_execution":{"supported":true},"context_management":{"supported":true,"clear_tool_uses_20250919":{"supported":true},"clear_thinking_20251015":{"supported":true},"compact_20260112":{"supported":true}},"effort":{"supported":true,"low":{"supported":true},"medium":{"supported":true},"high":{"supported":true},"xhigh":{"supported":false},"max":{"supported":true}},"image_input":{"supported":true},"pdf_input":{"supported":true},"structured_outputs":{"supported":true},"thinking":{"supported":true,"types":{"enabled":{"supported":true},"adaptive":{"supported":true}}}}},{"type":"model","id":"claude-opus-4-5-20251101","display_name":"Claude Opus 4.5","created_at":"2025-11-24T00:00:00Z","max_input_tokens":200000,"max_tokens":64000,"capabilities":{"batch":{"supported":true},"citations":{"supported":true},"code_execution":{"supported":true},"context_management":{"supported":true,"clear_tool_uses_20250919":{"supported":true},"clear_thinking_20251015":{"supported":true},"compact_20260112":{"supported":false}},"effort":{"supported":true,"low":{"supported":true},"medium":{"supported":true},"high":{"supported":true},"xhigh":{"supported":false},"max":{"supported":false}},"image_input":{"supported":true},"pdf_input":{"supported":true},"structured_outputs":{"supported":true},"thinking":{"supported":true,"types":{"enabled":{"supported":true},"adaptive":{"supported":false}}}}},{"type":"model","id":"claude-haiku-4-5-20251001","display_name":"Claude Haiku 4.5","created_at":"2025-10-15T00:00:00Z","max_input_tokens":200000,"max_tokens":64000,"capabilities":{"batch":{"supported":true},"citations":{"supported":true},"code_execution":{"supported":false},"context_management":{"supported":true,"clear_tool_uses_20250919":{"supported":true},"clear_thinking_20251015":{"supported":true},"compact_20260112":{"supported":false}},"effort":{"supported":false,"low":{"supported":false},"medium":{"supported":false},"high":{"supported":false},"xhigh":{"supported":false},"max":{"supported":false}},"image_input":{"supported":true},"pdf_input":{"supported":true},"structured_outputs":{"supported":true},"thinking":{"supported":true,"types":{"enabled":{"supported":true},"adaptive":{"supported":false}}}}},{"type":"model","id":"claude-sonnet-4-5-20250929","display_name":"Claude Sonnet 4.5","created_at":"2025-09-29T00:00:00Z","max_input_tokens":1000000,"max_tokens":64000,"capabilities":{"batch":{"supported":true},"citations":{"supported":true},"code_execution":{"supported":true},"context_management":{"supported":true,"clear_tool_uses_20250919":{"supported":true},"clear_thinking_20251015":{"supported":true},"compact_20260112":{"supported":false}},"effort":{"supported":false,"low":{"supported":false},"medium":{"supported":false},"high":{"supported":false},"xhigh":{"supported":false},"max":{"supported":false}},"image_input":{"supported":true},"pdf_input":{"supported":true},"structured_outputs":{"supported":true},"thinking":{"supported":true,"types":{"enabled":{"supported":true},"adaptive":{"supported":false}}}}},{"type":"model","id":"claude-opus-4-1-20250805","display_name":"Claude Opus 4.1","created_at":"2025-08-05T00:00:00Z","max_input_tokens":200000,"max_tokens":32000,"capabilities":{"batch":{"supported":true},"citations":{"supported":true},"code_execution":{"supported":false},"context_management":{"supported":true,"clear_tool_uses_20250919":{"supported":true},"clear_thinking_20251015":{"supported":true},"compact_20260112":{"supported":false}},"effort":{"supported":false,"low":{"supported":false},"medium":{"supported":false},"high":{"supported":false},"xhigh":{"supported":false},"max":{"supported":false}},"image_input":{"supported":true},"pdf_input":{"supported":true},"structured_outputs":{"supported":true},"thinking":{"supported":true,"types":{"enabled":{"supported":true},"adaptive":{"supported":false}}}}}],"has_more":false,"first_id":"claude-sonnet-5","last_id":"claude-opus-4-1-20250805"}'
+
+  - ref: claude-models-standard-list
+    name: claude-models-standard-list
+    display_name: "Standard team static model list"
+    type: request-termination
+    enabled: true
+    global: false
+    config:
+      status_code: 200
+      content_type: application/json
+      body: '{"data":[{"type":"model","id":"claude-opus-4-8","display_name":"Claude Opus 4.8","created_at":"2026-05-28T00:00:00Z","max_input_tokens":1000000,"max_tokens":128000,"capabilities":{"batch":{"supported":true},"citations":{"supported":true},"code_execution":{"supported":true},"context_management":{"supported":true,"clear_tool_uses_20250919":{"supported":true},"clear_thinking_20251015":{"supported":true},"compact_20260112":{"supported":true}},"effort":{"supported":true,"low":{"supported":true},"medium":{"supported":true},"high":{"supported":true},"xhigh":{"supported":true},"max":{"supported":true}},"image_input":{"supported":true},"pdf_input":{"supported":true},"structured_outputs":{"supported":true},"thinking":{"supported":true,"types":{"enabled":{"supported":false},"adaptive":{"supported":true}}}}},{"type":"model","id":"claude-opus-4-7","display_name":"Claude Opus 4.7","created_at":"2026-04-14T00:00:00Z","max_input_tokens":1000000,"max_tokens":128000,"capabilities":{"batch":{"supported":true},"citations":{"supported":true},"code_execution":{"supported":true},"context_management":{"supported":true,"clear_tool_uses_20250919":{"supported":true},"clear_thinking_20251015":{"supported":true},"compact_20260112":{"supported":true}},"effort":{"supported":true,"low":{"supported":true},"medium":{"supported":true},"high":{"supported":true},"xhigh":{"supported":true},"max":{"supported":true}},"image_input":{"supported":true},"pdf_input":{"supported":true},"structured_outputs":{"supported":true},"thinking":{"supported":true,"types":{"enabled":{"supported":false},"adaptive":{"supported":true}}}}},{"type":"model","id":"claude-opus-4-6","display_name":"Claude Opus 4.6","created_at":"2026-02-04T00:00:00Z","max_input_tokens":1000000,"max_tokens":128000,"capabilities":{"batch":{"supported":true},"citations":{"supported":true},"code_execution":{"supported":true},"context_management":{"supported":true,"clear_tool_uses_20250919":{"supported":true},"clear_thinking_20251015":{"supported":true},"compact_20260112":{"supported":true}},"effort":{"supported":true,"low":{"supported":true},"medium":{"supported":true},"high":{"supported":true},"xhigh":{"supported":false},"max":{"supported":true}},"image_input":{"supported":true},"pdf_input":{"supported":true},"structured_outputs":{"supported":true},"thinking":{"supported":true,"types":{"enabled":{"supported":true},"adaptive":{"supported":true}}}}},{"type":"model","id":"claude-opus-4-5-20251101","display_name":"Claude Opus 4.5","created_at":"2025-11-24T00:00:00Z","max_input_tokens":200000,"max_tokens":64000,"capabilities":{"batch":{"supported":true},"citations":{"supported":true},"code_execution":{"supported":true},"context_management":{"supported":true,"clear_tool_uses_20250919":{"supported":true},"clear_thinking_20251015":{"supported":true},"compact_20260112":{"supported":false}},"effort":{"supported":true,"low":{"supported":true},"medium":{"supported":true},"high":{"supported":true},"xhigh":{"supported":false},"max":{"supported":false}},"image_input":{"supported":true},"pdf_input":{"supported":true},"structured_outputs":{"supported":true},"thinking":{"supported":true,"types":{"enabled":{"supported":true},"adaptive":{"supported":false}}}}},{"type":"model","id":"claude-opus-4-1-20250805","display_name":"Claude Opus 4.1","created_at":"2025-08-05T00:00:00Z","max_input_tokens":200000,"max_tokens":32000,"capabilities":{"batch":{"supported":true},"citations":{"supported":true},"code_execution":{"supported":false},"context_management":{"supported":true,"clear_tool_uses_20250919":{"supported":true},"clear_thinking_20251015":{"supported":true},"compact_20260112":{"supported":false}},"effort":{"supported":false,"low":{"supported":false},"medium":{"supported":false},"high":{"supported":false},"xhigh":{"supported":false},"max":{"supported":false}},"image_input":{"supported":true},"pdf_input":{"supported":true},"structured_outputs":{"supported":true},"thinking":{"supported":true,"types":{"enabled":{"supported":true},"adaptive":{"supported":false}}}}}],"has_more":false,"first_id":"claude-opus-4-8","last_id":"claude-opus-4-1-20250805"}'
+
+  mcp_servers:
+  # Already live, re-declared verbatim (unconditioned fallback for any
+  # caller with no recognized `team` claim — same role as 1.x's
+  # header-less `claude-models-route`).
+  - ref: anthropic-models-endpoint
+    name: anthropic-models-endpoint
+    display_name: "anthropic-models endpoint"
+    type: passthrough-listener
+    enabled: true
+    access:
+      acl_attribute_type: consumer
+    config:
+      url: https://api.anthropic.com/v1/models
+      route:
+        paths:
+        - /anthropic/v1/models
+        protocols:
+        - http
+        - https
+      logging:
+        payloads: false
+        audits: false
+      server:
+        forward_client_headers: false
+        timeout: 10000
+      max_request_body_size: 8388608
+    policies:
+    - anthropic-add-key
+
+  # NEW — the two header-matched halves of the mirror.
+  - ref: claude-models-premium
+    name: claude-models-premium
+    display_name: "Claude models (premium team)"
+    type: passthrough-listener
+    enabled: true
+    access:
+      acl_attribute_type: consumer
+    config:
+      url: https://api.anthropic.com/v1/models
+      route:
+        paths:
+        - /anthropic/v1/models
+        headers:
+          Team:
+          - kong-premium
+        protocols:
+        - http
+        - https
+    policies:
+    - claude-models-premium-list
+
+  - ref: claude-models-standard
+    name: claude-models-standard
+    display_name: "Claude models (standard team)"
+    type: passthrough-listener
+    enabled: true
+    access:
+      acl_attribute_type: consumer
+    config:
+      url: https://api.anthropic.com/v1/models
+      route:
+        paths:
+        - /anthropic/v1/models
+        headers:
+          Team:
+          - kong-standard
+        protocols:
+        - http
+        - https
+    policies:
+    - claude-models-standard-list
+
+  models:
+  - ref: claude
+    type: model
+    name: claude
+    display_name: "Claude"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    access:
+      identity_providers:
+      - okta-groups-idp
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body:
+            model:
+            - claude-sonnet-4-5
+      model:
+        name_header: true
+    targets:
+    - name: claude-sonnet-5
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 5
+        output_cost: 15
+
+  - ref: claude-sonnet-5
+    type: model
+    name: claude-sonnet-5
+    display_name: "Claude Sonnet 5"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    access:
+      identity_providers:
+      - okta-groups-idp
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body:
+            model:
+            - claude-sonnet-5
+      model:
+        name_header: true
+    targets:
+    - name: claude-sonnet-5
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 5
+        output_cost: 15
+
+  - ref: claude-haiku
+    type: model
+    name: claude-haiku
+    display_name: "Claude Haiku"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    access:
+      identity_providers:
+      - okta-groups-idp
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body:
+            model:
+            - claude-haiku-4-5-20251001
+      model:
+        name_header: true
+      logging:
+        payloads: true
+    targets:
+    - name: claude-haiku-4-5-20251001
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 0.8
+        output_cost: 4
+
+  - ref: claude-opus
+    type: model
+    name: claude-opus
+    display_name: "Claude Opus"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    access:
+      identity_providers:
+      - okta-groups-idp
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body:
+            model:
+            - claude-opus-4-8
+      model:
+        name_header: true
+    targets:
+    - name: claude-opus-4-8
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 15
+        output_cost: 75
+
+  - ref: claude-opus-5
+    type: model
+    name: claude-opus-5
+    display_name: "Claude Opus 5"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    access:
+      identity_providers:
+      - okta-groups-idp
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body:
+            model:
+            - claude-opus-5
+      model:
+        name_header: true
+    targets:
+    - name: claude-opus-5
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 15
+        output_cost: 75
+
+  - ref: claude-fable-5
+    type: model
+    name: claude-fable-5
+    display_name: "Claude Fable 5"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    access:
+      identity_providers:
+      - okta-groups-idp
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body:
+            model:
+            - claude-fable-5
+      model:
+        name_header: true
+    targets:
+    - name: claude-fable-5
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 15
+        output_cost: 75
+
+  - ref: claude-opus-4-7
+    type: model
+    name: claude-opus-4-7
+    display_name: "Claude Opus 4.7"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    access:
+      identity_providers:
+      - okta-groups-idp
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body:
+            model:
+            - claude-opus-4-7
+      model:
+        name_header: true
+    targets:
+    - name: claude-opus-4-7
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 15
+        output_cost: 75
+
+  - ref: claude-sonnet-4-6
+    type: model
+    name: claude-sonnet-4-6
+    display_name: "Claude Sonnet 4.6"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    access:
+      identity_providers:
+      - okta-groups-idp
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body:
+            model:
+            - claude-sonnet-4-6
+      model:
+        name_header: true
+    targets:
+    - name: claude-sonnet-4-6
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 5
+        output_cost: 15
+
+  - ref: claude-opus-4-6
+    type: model
+    name: claude-opus-4-6
+    display_name: "Claude Opus 4.6"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    access:
+      identity_providers:
+      - okta-groups-idp
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body:
+            model:
+            - claude-opus-4-6
+      model:
+        name_header: true
+    targets:
+    - name: claude-opus-4-6
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 15
+        output_cost: 75
+
+  - ref: claude-opus-4-5
+    type: model
+    name: claude-opus-4-5
+    display_name: "Claude Opus 4.5"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    access:
+      identity_providers:
+      - okta-groups-idp
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body:
+            model:
+            - claude-opus-4-5-20251101
+      model:
+        name_header: true
+    targets:
+    - name: claude-opus-4-5-20251101
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 15
+        output_cost: 75
+
+  - ref: claude-sonnet-4-5-20250929
+    type: model
+    name: claude-sonnet-4-5-20250929
+    display_name: "Claude Sonnet 4.5 (dated)"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    access:
+      identity_providers:
+      - okta-groups-idp
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body:
+            model:
+            - claude-sonnet-4-5-20250929
+      model:
+        name_header: true
+    targets:
+    - name: claude-sonnet-4-5-20250929
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 5
+        output_cost: 15
+
+  - ref: claude-opus-4-1-20250805
+    type: model
+    name: claude-opus-4-1-20250805
+    display_name: "Claude Opus 4.1"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    access:
+      identity_providers:
+      - okta-groups-idp
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body:
+            model:
+            - claude-opus-4-1-20250805
+      model:
+        name_header: true
+    targets:
+    - name: claude-opus-4-1-20250805
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 15
+        output_cost: 75

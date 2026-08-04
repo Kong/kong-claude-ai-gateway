@@ -5,6 +5,8 @@ Screenshots and diagrams referenced from `README.md`.
 - `step1-deploy/` — Konnect console walkthrough for Step 1 (generating a
   Personal Access Token, the created AI Gateway, and configuring/
   connecting a self-managed Docker data plane).
+- `step3-vault/` — Konnect console walkthrough for Step 3 (adding
+  `claude-gateway-vault` and storing secrets in it via the UI).
 
 Add more subdirectories per step as you work through Steps 2–5 (Okta app
 setup, consumer-group screens, etc.) and link them with relative paths,
