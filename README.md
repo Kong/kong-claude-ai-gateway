@@ -23,9 +23,9 @@ reference — it has its own README and isn't touched by anything below.
   - [2. Integration setup with Claude](#2-integration-setup-with-claude)
   - [3. Vault integration](#3-vault-integration)
   - [4. SSO with OIDC (Okta)](#4-sso-with-oidc-okta)
-  - [4 (continued). Per-group model listing](#4-continued-per-group-model-listing)
-  - [5. Usage dashboard](#5-usage-dashboard)
-  - [6 (final, for now). Per-group spend limits](#6-final-for-now-per-group-spend-limits)
+  - [5. Per-group model listing](#5-per-group-model-listing)
+  - [6. Usage dashboard](#6-usage-dashboard)
+  - [7. Per-group spend limits](#7-per-group-spend-limits)
 - [Repo layout](#repo-layout)
 - [Secrets](#secrets)
 - [Status](#status)
@@ -85,11 +85,35 @@ governance is the natural next module if you extend this directory.
 
 ## What this example builds
 
-12 individual Claude models behind one route (`/anthropic`), each with its
-own real Anthropic model id, cost fields, and access gate — plus
-group-based model *listing* and *spend limits*, both keyed on the same
-Okta `team` claim. Nobody gets a Kong-issued API key, and there's no
-per-user Consumer to manage — every access decision is by group.
+One AI Gateway 2.0 control plane fronting Claude, assembled step by step
+(numbering matches the Steps → files table below):
+
+1. **Deploy the gateway** — an AI Gateway 2.0 control plane in Konnect,
+   hybrid deployment (managed control plane, self-hosted data plane).
+2. **Wire up Claude** — 12 real Claude models (Sonnet, Haiku, and Opus
+   variants, plus Fable) behind one route (`/anthropic`), each with a
+   real Anthropic model id and per-token cost fields. Anthropic direct
+   and AWS Bedrock are configured as two interchangeable providers.
+3. **Vault every credential** — one command seeds a Konnect vault with
+   every secret this example needs; nothing is ever inlined in a YAML
+   file.
+4. **Gate access with Okta SSO** — every model requires a valid,
+   Okta-issued bearer token to reach it; no Kong-issued API keys, no
+   per-user Consumer to manage. This step alone is identity-based, not
+   group-based — any authenticated caller can reach any model.
+5. **Filter the model catalog by group** — `GET /v1/models` returns a
+   different list depending on the caller's Okta `team` claim: this is
+   where group membership starts actually mattering.
+6. **Usage dashboard** — a Konnect Analytics dashboard for cost/token/
+   request visibility across models and consumers (config saved here;
+   not yet wired up live — see Status).
+7. **Cap spend by group** — a cost-based rate-limit policy budgets each
+   group's chat spend, computed from every model's real per-token cost.
+   Group-based because there's no per-user Consumer for it to key on
+   instead.
+
+The model-listing filter (Step 5) and the spend budget (Step 7) are both
+driven by the same signal — an Okta access token's `team` claim:
 
 | Group | Sees in `/v1/models` | Chat spend budget |
 |-------|----------------------|--------------------|
@@ -172,9 +196,9 @@ that point, so `git diff` between files shows exactly what each step adds
 | 2 | Integration setup with Claude | [`2-claude-integration.yaml`](2-claude-integration.yaml) |
 | 3 | Vault integration | [`scripts/bootstrap-vault.sh`](scripts/bootstrap-vault.sh) (not a `kongctl` file — see below) |
 | 4 | SSO with OIDC (Okta) | [`3-identity-provider.yaml`](3-identity-provider.yaml) |
-| 4 *(continued)* | Per-group model listing | [`6-per-group-model-listing.yaml`](6-per-group-model-listing.yaml) |
-| 5 | Usage dashboard | [`5-dashboard.json`](5-dashboard.json) |
-| 6 *(final, for now)* | Per-group spend limits | [`7-rate-limiting-policy.yaml`](7-rate-limiting-policy.yaml) |
+| 5 | Per-group model listing | [`6-per-group-model-listing.yaml`](6-per-group-model-listing.yaml) |
+| 6 | Usage dashboard | [`5-dashboard.json`](5-dashboard.json) |
+| 7 | Per-group spend limits | [`7-rate-limiting-policy.yaml`](7-rate-limiting-policy.yaml) |
 
 ### 1. Deploy the gateway (hybrid)
 
@@ -303,7 +327,7 @@ that finding turned out to be wrong, or at best specific to an older
 `kong/kong-ai-gateway-dev` image than what's running now (`2.0.1-rc.5`).
 
 Each target's `config` also carries `input_cost`/`output_cost` (USD per
-million tokens) now — required for any cost-based policy (like Step 6's
+million tokens) now — required for any cost-based policy (like Step 7's
 `ai-rate-limiting-advanced` budget) to compute anything meaningful; a
 target with these unset contributes 0 to a cost-based limit and the limit
 silently never trips. Values here mostly mirror the tiers already
@@ -446,14 +470,14 @@ in this org's `team` claim. The three placeholders were deleted live
 /v1/ai-gateways/{id}/consumer-groups/{id}` calls), not just dropped from
 the file.
 
-### 4 (continued). Per-group model listing
+### 5. Per-group model listing
 
 Group-based *entitlement*, not spend limits — `6-per-group-model-listing.yaml`
 mirrors [`classic-kong-gateway/kong/04-per-user-model-limits.yaml`](classic-kong-gateway/kong/04-per-user-model-limits.yaml)
 (the classic-gateway track's per-team model-catalog filtering) onto AI
-Gateway 2.0. Numbered 6 to avoid renumbering already-applied files, but
-this is conceptually still Step 4, not a new stage — see the file's header
-comment for the full 1.x → 2.0 mapping.
+Gateway 2.0. The file itself is still numbered 6 (its filename predates
+this renumbering) — see its header comment for the full 1.x → 2.0
+mapping.
 
 **Why not `models.access.acls`** (the mechanism an earlier exploratory
 build of this same idea used, since removed from this repo): at the time
@@ -527,7 +551,7 @@ logging in as `kong-premium`/`kong-standard` users confirms the filtered
 listings work with real, signature-verified tokens, not just the crafted
 unsigned JWTs used above to isolate the routing logic during development.
 
-### 5. Usage dashboard
+### 6. Usage dashboard
 
 The next step in this example is a Konnect Analytics dashboard for the
 `llm_usage` datasource, not spend limits — `5-dashboard.json` holds the
@@ -539,7 +563,7 @@ this dashboard and `7-rate-limiting-policy.yaml`'s spend budgets.
 
 ![Dashboard overview — cost, tokens, requests, top models, health, provider mix, latency](images/step5-dashboard/01-dashboard-overview.png)
 
-### 6 (final, for now). Per-group spend limits
+### 7. Per-group spend limits
 
 `7-rate-limiting-policy.yaml` (renamed from `4-rate-limiting-policy.yaml`
 — that name became inaccurate once the steps got renumbered) is the last
@@ -558,7 +582,7 @@ there's no consumer identity to key a budget on in the first place.
 | Group | Budget | Basis |
 |-------|--------|-------|
 | `kong-premium` | $5.00 / 60s | all 12 models, no per-model restriction |
-| `kong-standard` | $1.00 / 60s | all 12 models (listing is separately filtered by Step 4's per-group model listing — this policy only caps spend, not which models are visible/callable) |
+| `kong-standard` | $1.00 / 60s | all 12 models (listing is separately filtered by Step 5's per-group model listing — this policy only caps spend, not which models are visible/callable) |
 
 Budgets are **cost-based, not token-based** (`tokens_count_strategy:
 cost`) — a hard dependency on Step 2's `input_cost`/`output_cost` fields;
@@ -594,9 +618,9 @@ per-model `access.acls` layered on top; out of scope here.
 ├── 1-gateway.yaml                   # Step 1
 ├── 2-claude-integration.yaml        # Step 2
 ├── 3-identity-provider.yaml         # Step 4 (SSO)
-├── 6-per-group-model-listing.yaml   # Step 4 continued (per-group model listing)
-├── 5-dashboard.json                 # Step 5 (usage dashboard) — tile definitions only, not yet applied
-├── 7-rate-limiting-policy.yaml      # Step 6, final for now (per-group spend limits)
+├── 6-per-group-model-listing.yaml   # Step 5 (per-group model listing)
+├── 5-dashboard.json                 # Step 6 (usage dashboard) — tile definitions only, not yet applied
+├── 7-rate-limiting-policy.yaml      # Step 7 (per-group spend limits)
 ├── scripts/
 │   └── bootstrap-vault.sh           # Step 3 — one-command vault setup
 ├── images/                          # console screenshots, referenced from the steps above
@@ -619,11 +643,11 @@ resolved by Kong at request time, not by `kongctl` at apply time or
 |------|------|-----------------|
 | 1. Deploy the gateway | `1-gateway.yaml` | ✅ Applied; data plane connected (Docker, self-managed, `kong/kong-ai-gateway-dev:2.0.1-rc.5`) |
 | 2. Claude integration | `2-claude-integration.yaml` | ✅ Applied — 12 models, `route.model.body` (not `path_aliases`, see Step 2 above), `input_cost`/`output_cost` set on every target (placeholder values, see Step 2) |
-| 3. Vault integration | *(UI, no file)* | ✅ Vault + secrets created via Konnect UI |
+| 3. Vault integration | `scripts/bootstrap-vault.sh` | ✅ Idempotent — vault, config store, and all 8 secrets created/updated live; re-run and confirmed a second time against the existing setup with zero duplication |
 | 4. SSO (Okta) | `3-identity-provider.yaml` | ✅ Applied — bearer-token auth, plus real group-claim mapping (`consumer_groups_claim: ["team"]`, set via a raw API PUT since kongctl can't manage this field), see Step 4 above |
-| 4 (cont.) Per-group model listing | `6-per-group-model-listing.yaml` | ✅ Applied — 5 resources; a global-policy bug that 500'd the whole gateway was hit and fixed live (see Step 4 continued above). Tested with crafted JWTs (premium=10 models, standard=5, fallback=real catalog) **and confirmed with real Okta interactive sign-in tokens** |
-| 5. Usage dashboard | `5-dashboard.json` | ⚠️ Saved only — not yet applied or documented end-to-end |
-| 6. Per-group spend limits (final, for now) | `7-rate-limiting-policy.yaml` | ✅ Applied — `tiered-cost-budget` policy attached to all 12 models, budgeting `kong-premium`/`kong-standard` in USD/min via each target's `input_cost`/`output_cost`. Config verified via `kongctl diff` (no drift) and a live curl; real spend-trip behavior (hitting the $1/$5 ceiling) not yet observed under real traffic |
+| 5. Per-group model listing | `6-per-group-model-listing.yaml` | ✅ Applied — 5 resources; a global-policy bug that 500'd the whole gateway was hit and fixed live (see Step 5 above). Tested with crafted JWTs (premium=10 models, standard=5, fallback=real catalog) **and confirmed with real Okta interactive sign-in tokens** |
+| 6. Usage dashboard | `5-dashboard.json` | ⚠️ Saved only — not yet applied or documented end-to-end |
+| 7. Per-group spend limits | `7-rate-limiting-policy.yaml` | ✅ Applied — `tiered-cost-budget` policy attached to all 12 models, budgeting `kong-premium`/`kong-standard` in USD/min via each target's `input_cost`/`output_cost`. Config verified via `kongctl diff` (no drift) and a live curl; real spend-trip behavior (hitting the $1/$5 ceiling) not yet observed under real traffic |
 
 AI Gateway 2.0 is beta and its schema is moving between `kongctl`
 releases and even between data-plane images (`2.0.1-rc.4` → `2.0.1-rc.5`
