@@ -498,6 +498,55 @@ kongctl apply -f 6-per-group-model-listing.yaml
 **Verify:** call `GET /anthropic/v1/models` with a `kong-premium` token
 and a `kong-standard` token — each returns a different model list.
 
+#### What's in the access token
+
+The `team` claim comes back as a plain custom claim on the Okta access
+token, alongside the standard OIDC ones. Decoded, a `kong-standard`
+user's token looks like:
+
+```json
+{
+  "ver": 1,
+  "jti": "AT.BD_sfLzShWmrnaHt3kX6CI0hhehOMyuaYOWK4EegfsQ",
+  "iss": "https://integrator-1741022.okta.com/oauth2/default",
+  "aud": "api://default",
+  "iat": 1784432546,
+  "exp": 1784436146,
+  "cid": "0oa15d4jr5oIR5Eel698",
+  "uid": "00u15c6ukel5jXEd0698",
+  "scp": ["openid"],
+  "auth_time": 1784432545,
+  "sub": "declan.keane+standard@konghq.com",
+  "company-groups": ["Everyone", "kong-standard"],
+  "clientId": "0oa15d4jr5oIR5Eel698",
+  "team": "kong-standard"
+}
+```
+
+`company-groups` is Okta's own group-membership claim, listing every
+group the user belongs to — this repo doesn't read it. `team` is the
+single custom claim actually driving everything here: the
+`consumer_groups_claim` on `okta-groups-idp` (Step 4) maps it onto a
+Konnect consumer_group for spend limits (Step 7), and the
+`team-claim-header` pre-function (this step) copies it onto a `Team`
+header for the mcp_servers above to match on. Add `team` as a custom
+claim on your Okta authorization server if it isn't already there — this
+repo doesn't work off `company-groups` or any other group claim as-is.
+
+#### Test it with a real client
+
+Sign in as a user whose `team` claim resolves to `kong-standard` (5
+Opus-tier models, per [What you'll build](#what-youll-build)) using the
+same interactive OIDC connection from Step 4 — no client reconfiguration
+needed, since Kong is deciding the list, not the client:
+
+![Model discovery finds 5 models for a kong-standard user, inference still works](images/step5-filtering/01-standard-tier-test.png)
+
+Model discovery now returns exactly the standard tier's 5 models instead
+of the full catalog, and inference still succeeds through the identity
+provider — confirming the group-based filtering and the SSO gate from
+Step 4 are both applying to this token correctly.
+
 ### 6. Add a usage dashboard
 
 `5-dashboard.json` holds a Konnect Analytics dashboard for cost, token,
