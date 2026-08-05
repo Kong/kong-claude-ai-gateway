@@ -556,6 +556,8 @@ the API once you're ready to automate it.
 
 ![Dashboard overview](images/step5-dashboard/01-dashboard-overview.png)
 
+![Dashboard detail — cost, tokens, requests, model/dev breakdowns, and latency](images/step5-dashboard/02-dashboard-detail.png)
+
 ### 7. Set spend limits
 
 Adds a cost-based budget per group, computed from each model's
