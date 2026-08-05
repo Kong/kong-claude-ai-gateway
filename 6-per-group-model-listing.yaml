@@ -26,8 +26,9 @@
 #   global pre-function (JWT -> Team header)   | global `pre-function` policy, same Lua
 #   service+route+headers match, per team      | mcp_server+route.headers match, per team
 #   request-termination plugin, per team       | `request-termination` policy, per team
-#   fallback route (no header condition)       | existing `anthropic-models-endpoint`
-#                                               |   mcp_server (already live, unconditioned)
+#   fallback route (no header condition)       | `anthropic-models-endpoint` mcp_server
+#                                               |   (from 2-claude-integration.yaml, Step 3,
+#                                               |   unconditioned)
 #
 # NOT MIRRORED / genuinely different:
 #   - 1.x's team routes lived on the SAME service as the real /v1/models
@@ -64,13 +65,14 @@
 # than re-derived, so both tracks show the identical catalog per team.
 #
 # Re-declares identity_providers/consumer_groups/model_providers/models
-# unchanged from 3-identity-provider.yaml, plus the two already-live
-# policies (`log`, `anthropic-add-key`) and the one already-live
-# mcp_server (`anthropic-models-endpoint`) verbatim — this file's
-# `policies:`/`mcp_servers:` keys make kongctl diff the FULL live set of
-# each type against what's declared, and anything not re-declared here
-# gets proposed for deletion (the same lesson learned the hard way earlier
-# in this repo's history with 3-identity-provider.yaml and its 12 models).
+# unchanged from 3-identity-provider.yaml, plus the already-live `log`
+# policy and the `anthropic-add-key` policy + `anthropic-models-endpoint`
+# mcp_server from 2-claude-integration.yaml (Step 3), all verbatim — this
+# file's `policies:`/`mcp_servers:` keys make kongctl diff the FULL live
+# set of each type against what's declared, and anything not re-declared
+# here gets proposed for deletion (the same lesson learned the hard way
+# earlier in this repo's history with 3-identity-provider.yaml and its 12
+# models).
 #
 # Preview: kongctl diff -f 6-per-group-model-listing.yaml
 # Apply:   kongctl apply -f 6-per-group-model-listing.yaml
@@ -137,8 +139,9 @@ ai_gateways:
           value: "{vault://claude-gateway-vault/anthropic-api-key}"
 
   policies:
-  # Already live, re-declared verbatim so this file's `policies:` key
-  # doesn't propose deleting them.
+  # `log` is already live (created outside this repo's numbered files),
+  # re-declared verbatim so this file's `policies:` key doesn't propose
+  # deleting it.
   - ref: log
     name: log
     display_name: "log"
@@ -149,6 +152,10 @@ ai_gateways:
       path: /tmp/log.txt
       reopen: true
 
+  # anthropic-add-key was created by 2-claude-integration.yaml (Step 3);
+  # re-declared verbatim here for the same reason. `add` + `replace` on
+  # the same header (see that file's comment) so the vault-sourced key
+  # always wins, whether or not the caller already sent one.
   - ref: anthropic-add-key
     name: anthropic-add-key
     display_name: "anthropic-add-key"
@@ -159,6 +166,34 @@ ai_gateways:
       add:
         headers:
         - "{vault://claude-gateway-vault/anthropic-api-key-header}"
+      replace:
+        headers:
+        - "{vault://claude-gateway-vault/anthropic-api-key-header}"
+
+  # okta-models-auth was created by 3-identity-provider.yaml (Step 4) to
+  # gate GET /anthropic/v1/models — mcp_servers have no access.identity_
+  # providers field, so this is a plain openid-connect policy instead of
+  # the access-block wiring ai_gateway_models use. Re-declared verbatim
+  # here and attached below to all three models-listing mcp_servers, not
+  # just the fallback, so group-filtered listing requires a real token
+  # too.
+  - ref: okta-models-auth
+    name: okta-models-auth
+    display_name: "Okta OIDC (models endpoint)"
+    type: openid-connect
+    enabled: true
+    global: false
+    config:
+      issuer: "{vault://claude-gateway-vault/okta-issuer}"
+      client_id:
+      - "{vault://claude-gateway-vault/okta-client-id}"
+      client_secret:
+      - "{vault://claude-gateway-vault/okta-client-secret}"
+      cache_tokens_salt: "{vault://claude-gateway-vault/oidc-cache-tokens-salt}"
+      auth_methods:
+      - bearer
+      consumer_optional: true
+      ssl_verify: true
 
   # NEW — the claim-extraction half of the mirror. Global (like 1.x's
   # top-level pre-function): route.headers matching on the mcp_servers
@@ -272,9 +307,9 @@ ai_gateways:
       body: '{"data":[{"type":"model","id":"claude-opus-4-8","display_name":"Claude Opus 4.8","created_at":"2026-05-28T00:00:00Z","max_input_tokens":1000000,"max_tokens":128000,"capabilities":{"batch":{"supported":true},"citations":{"supported":true},"code_execution":{"supported":true},"context_management":{"supported":true,"clear_tool_uses_20250919":{"supported":true},"clear_thinking_20251015":{"supported":true},"compact_20260112":{"supported":true}},"effort":{"supported":true,"low":{"supported":true},"medium":{"supported":true},"high":{"supported":true},"xhigh":{"supported":true},"max":{"supported":true}},"image_input":{"supported":true},"pdf_input":{"supported":true},"structured_outputs":{"supported":true},"thinking":{"supported":true,"types":{"enabled":{"supported":false},"adaptive":{"supported":true}}}}},{"type":"model","id":"claude-opus-4-7","display_name":"Claude Opus 4.7","created_at":"2026-04-14T00:00:00Z","max_input_tokens":1000000,"max_tokens":128000,"capabilities":{"batch":{"supported":true},"citations":{"supported":true},"code_execution":{"supported":true},"context_management":{"supported":true,"clear_tool_uses_20250919":{"supported":true},"clear_thinking_20251015":{"supported":true},"compact_20260112":{"supported":true}},"effort":{"supported":true,"low":{"supported":true},"medium":{"supported":true},"high":{"supported":true},"xhigh":{"supported":true},"max":{"supported":true}},"image_input":{"supported":true},"pdf_input":{"supported":true},"structured_outputs":{"supported":true},"thinking":{"supported":true,"types":{"enabled":{"supported":false},"adaptive":{"supported":true}}}}},{"type":"model","id":"claude-opus-4-6","display_name":"Claude Opus 4.6","created_at":"2026-02-04T00:00:00Z","max_input_tokens":1000000,"max_tokens":128000,"capabilities":{"batch":{"supported":true},"citations":{"supported":true},"code_execution":{"supported":true},"context_management":{"supported":true,"clear_tool_uses_20250919":{"supported":true},"clear_thinking_20251015":{"supported":true},"compact_20260112":{"supported":true}},"effort":{"supported":true,"low":{"supported":true},"medium":{"supported":true},"high":{"supported":true},"xhigh":{"supported":false},"max":{"supported":true}},"image_input":{"supported":true},"pdf_input":{"supported":true},"structured_outputs":{"supported":true},"thinking":{"supported":true,"types":{"enabled":{"supported":true},"adaptive":{"supported":true}}}}},{"type":"model","id":"claude-opus-4-5-20251101","display_name":"Claude Opus 4.5","created_at":"2025-11-24T00:00:00Z","max_input_tokens":200000,"max_tokens":64000,"capabilities":{"batch":{"supported":true},"citations":{"supported":true},"code_execution":{"supported":true},"context_management":{"supported":true,"clear_tool_uses_20250919":{"supported":true},"clear_thinking_20251015":{"supported":true},"compact_20260112":{"supported":false}},"effort":{"supported":true,"low":{"supported":true},"medium":{"supported":true},"high":{"supported":true},"xhigh":{"supported":false},"max":{"supported":false}},"image_input":{"supported":true},"pdf_input":{"supported":true},"structured_outputs":{"supported":true},"thinking":{"supported":true,"types":{"enabled":{"supported":true},"adaptive":{"supported":false}}}}},{"type":"model","id":"claude-opus-4-1-20250805","display_name":"Claude Opus 4.1","created_at":"2025-08-05T00:00:00Z","max_input_tokens":200000,"max_tokens":32000,"capabilities":{"batch":{"supported":true},"citations":{"supported":true},"code_execution":{"supported":false},"context_management":{"supported":true,"clear_tool_uses_20250919":{"supported":true},"clear_thinking_20251015":{"supported":true},"compact_20260112":{"supported":false}},"effort":{"supported":false,"low":{"supported":false},"medium":{"supported":false},"high":{"supported":false},"xhigh":{"supported":false},"max":{"supported":false}},"image_input":{"supported":true},"pdf_input":{"supported":true},"structured_outputs":{"supported":true},"thinking":{"supported":true,"types":{"enabled":{"supported":true},"adaptive":{"supported":false}}}}}],"has_more":false,"first_id":"claude-opus-4-8","last_id":"claude-opus-4-1-20250805"}'
 
   mcp_servers:
-  # Already live, re-declared verbatim (unconditioned fallback for any
-  # caller with no recognized `team` claim — same role as 1.x's
-  # header-less `claude-models-route`).
+  # Created by 2-claude-integration.yaml (Step 3), re-declared verbatim
+  # here (unconditioned fallback for any caller with no recognized `team`
+  # claim — same role as 1.x's header-less `claude-models-route`).
   - ref: anthropic-models-endpoint
     name: anthropic-models-endpoint
     display_name: "anthropic-models endpoint"
@@ -298,9 +333,13 @@ ai_gateways:
         timeout: 10000
       max_request_body_size: 8388608
     policies:
+    - okta-models-auth
     - anthropic-add-key
 
-  # NEW — the two header-matched halves of the mirror.
+  # NEW — the two header-matched halves of the mirror. okta-models-auth
+  # attached here too so a forged Team header alone (the pre-function
+  # above doesn't verify the JWT signature) can't reach even the static
+  # filtered list without a real token.
   - ref: claude-models-premium
     name: claude-models-premium
     display_name: "Claude models (premium team)"
@@ -320,6 +359,7 @@ ai_gateways:
         - http
         - https
     policies:
+    - okta-models-auth
     - claude-models-premium-list
 
   - ref: claude-models-standard
@@ -341,6 +381,7 @@ ai_gateways:
         - http
         - https
     policies:
+    - okta-models-auth
     - claude-models-standard-list
 
   models:

@@ -1,6 +1,6 @@
 # Step 4 — SSO with OIDC (Okta in this example).
 #
-# (Numbered 3 because Step 3, vault integration, has no kongctl resource of
+# (Numbered 3 because Step 2, vault integration, has no kongctl resource of
 # its own — see README.md's step/file mapping table.)
 #
 # Adds a basic OIDC identity provider that requires a valid Okta-issued
@@ -81,19 +81,15 @@ ai_gateways:
       # consumer_groups_claim (maps the `team` claim to a consumer_group by
       # name) is NOT declared here on purpose — see the comment below.
 
-  # consumer_groups_claim is real and live-confirmed working — it's just
-  # not in kongctl's client schema (`kongctl explain
-  # ai_gateway.identity_providers.config --extended` still doesn't list
-  # it), so kongctl can't manage it declaratively. Confirmed two things by
-  # testing directly against the API:
-  #   1. It IS a real field: a raw PUT with `consumer_groups_claim` in
-  #      `config` succeeds (200), confirming it exists server-side even
-  #      though kongctl's SDK doesn't know about it (same class of gap as
-  #      `consumer_groups_optional` before it).
-  #   2. It's mutually exclusive with `consumer_claims`: the API 400s with
-  #      "only one or none of these fields must be set: 'consumer_claims',
-  #      'consumer_groups_claim'" if both are set — which is why
-  #      `consumer_claims` was REMOVED above rather than kept alongside it.
+  # consumer_groups_claim (maps the `team` claim onto a consumer_group by
+  # name) is a supported field on the Kong AI Gateway identity provider
+  # API. It isn't in kongctl's declarative schema yet (`kongctl explain
+  # ai_gateway.identity_providers.config --extended` doesn't list it), so
+  # kongctl can't manage it from this YAML. It's also mutually exclusive
+  # with `consumer_claims`: the API 400s with "only one or none of these
+  # fields must be set: 'consumer_claims', 'consumer_groups_claim'" if
+  # both are set — which is why `consumer_claims` was removed above rather
+  # than kept alongside it.
   # Set to `["team"]` — the same claim 6-per-group-model-listing.yaml's
   # pre-function policy already reads directly out of the JWT, confirmed
   # to carry exactly `kong-premium`/`kong-standard` values in this org's
@@ -148,6 +144,77 @@ ai_gateways:
         headers:
         - name: x-api-key
           value: "{vault://claude-gateway-vault/anthropic-api-key}"
+
+  # `anthropic-models-endpoint` (Step 3) has no `access.identity_providers`
+  # field the way ai_gateway_models do — mcp_servers' `access` block only
+  # supports acl_attribute_type/acls/default_tool_acls (confirmed via
+  # `kongctl explain ai_gateway.mcp_servers.access --extended`), so there's
+  # no declarative way to point it at okta-groups-idp. The fix is to attach
+  # the openid-connect plugin directly as its own policy instead, same
+  # config as the identity_provider above minus authorization_code (this
+  # is a plain GET a client hits directly, not a browser redirect flow).
+  # Without this, GET /anthropic/v1/models stays open to anyone even after
+  # this step locks inference down — re-declared on the mcp_server's
+  # `policies:` list below, alongside `anthropic-add-key`.
+  policies:
+  - ref: anthropic-add-key
+    name: anthropic-add-key
+    display_name: "anthropic-add-key"
+    type: request-transformer-advanced
+    enabled: true
+    global: false
+    config:
+      add:
+        headers:
+        - "{vault://claude-gateway-vault/anthropic-api-key-header}"
+      replace:
+        headers:
+        - "{vault://claude-gateway-vault/anthropic-api-key-header}"
+
+  - ref: okta-models-auth
+    name: okta-models-auth
+    display_name: "Okta OIDC (models endpoint)"
+    type: openid-connect
+    enabled: true
+    global: false
+    config:
+      issuer: "{vault://claude-gateway-vault/okta-issuer}"
+      client_id:
+      - "{vault://claude-gateway-vault/okta-client-id}"
+      client_secret:
+      - "{vault://claude-gateway-vault/okta-client-secret}"
+      cache_tokens_salt: "{vault://claude-gateway-vault/oidc-cache-tokens-salt}"
+      auth_methods:
+      - bearer
+      consumer_optional: true
+      ssl_verify: true
+
+  mcp_servers:
+  - ref: anthropic-models-endpoint
+    name: anthropic-models-endpoint
+    display_name: "anthropic-models endpoint"
+    type: passthrough-listener
+    enabled: true
+    access:
+      acl_attribute_type: consumer
+    config:
+      url: https://api.anthropic.com/v1/models
+      route:
+        paths:
+        - /anthropic/v1/models
+        protocols:
+        - http
+        - https
+      logging:
+        payloads: false
+        audits: false
+      server:
+        forward_client_headers: false
+        timeout: 10000
+      max_request_body_size: 8388608
+    policies:
+    - okta-models-auth
+    - anthropic-add-key
 
   models:
   - ref: claude

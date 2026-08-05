@@ -1,12 +1,13 @@
-# Step 2 — Integration setup with Claude.
+# Step 3 — Integration setup with Claude.
 #
-# Adds the model_providers Kong can reach Claude through, and one
+# Adds the model_providers Kong can reach Claude through, one
 # ai_gateway_model per Claude tier (Sonnet, Haiku, Opus), each exposed at
 # the same /anthropic route and disambiguated by the "model" the client
-# requests. No auth, no rate limiting yet — this step only proves the
-# gateway can proxy real Claude traffic before anything else layers on
-# top (see 4-rate-limiting-policy.yaml for the entitlement/tiering layer
-# this is designed to carry).
+# requests, and the passthrough listener + key-injection policy that make
+# GET /anthropic/v1/models work. No auth, no rate limiting yet — this step
+# only proves the gateway can proxy real Claude traffic and list models
+# before anything else layers on top (see 4-rate-limiting-policy.yaml for
+# the entitlement/tiering layer this is designed to carry).
 #
 # One model per tier, not one model with many targets: targets under the
 # same ai_gateway_model are meant to be interchangeable (e.g. the same
@@ -40,7 +41,7 @@
 #     Anthropic API key.
 #
 # This credential is a {vault://claude-gateway-vault/<key>} reference, not
-# a literal value — see README.md, Step 3, for how claude-gateway-vault gets
+# a literal value — see README.md, Step 2, for how claude-gateway-vault gets
 # provisioned and seeded. Nothing below this comment is safe to fill in
 # with a real secret; that's the point of the vault indirection.
 #
@@ -86,6 +87,63 @@ ai_gateways:
         headers:
         - name: x-api-key
           value: "{vault://claude-gateway-vault/anthropic-api-key}"
+
+  # Exposes GET /anthropic/v1/models, proxied straight to the real
+  # Anthropic catalog — ai_gateway_models above only route inference calls
+  # (POST, matched on the body's "model" field); a model list has no body
+  # to match on, so it needs its own resource. Ungated on purpose: this is
+  # the base, unconditioned listing every caller gets. 6-per-group-model-
+  # listing.yaml (Step 5) layers two more mcp_servers on the same
+  # /anthropic/v1/models path, matched on a Team header, that intercept
+  # this route for callers with a recognized group and return a filtered
+  # list instead — this one keeps serving as the fallback for everyone
+  # else, exactly as it does once Step 5 is applied.
+  policies:
+  # `add` alone only sets the header if the incoming request doesn't
+  # already carry one with this name — a caller could send their own
+  # x-api-key and `add` would silently leave it in place, forwarding the
+  # wrong (or no) key upstream. `add` + `replace` on the same header
+  # covers both cases: `add` sets it when absent, `replace` overwrites it
+  # when the caller already sent one, so the vault-sourced key always wins.
+  - ref: anthropic-add-key
+    name: anthropic-add-key
+    display_name: "anthropic-add-key"
+    type: request-transformer-advanced
+    enabled: true
+    global: false
+    config:
+      add:
+        headers:
+        - "{vault://claude-gateway-vault/anthropic-api-key-header}"
+      replace:
+        headers:
+        - "{vault://claude-gateway-vault/anthropic-api-key-header}"
+
+  mcp_servers:
+  - ref: anthropic-models-endpoint
+    name: anthropic-models-endpoint
+    display_name: "anthropic-models endpoint"
+    type: passthrough-listener
+    enabled: true
+    access:
+      acl_attribute_type: consumer
+    config:
+      url: https://api.anthropic.com/v1/models
+      route:
+        paths:
+        - /anthropic/v1/models
+        protocols:
+        - http
+        - https
+      logging:
+        payloads: false
+        audits: false
+      server:
+        forward_client_headers: false
+        timeout: 10000
+      max_request_body_size: 8388608
+    policies:
+    - anthropic-add-key
 
   models:
   - ref: claude
@@ -229,9 +287,9 @@ ai_gateways:
 
   # Everything below was cross-checked against the live Anthropic model
   # catalog (GET /anthropic/v1/models via the anthropic-models-endpoint
-  # passthrough listener, anthropic-version: 2023-06-01) rather than
-  # guessed — one ai_gateway_model per model id Anthropic actually
-  # returned that wasn't covered above yet.
+  # passthrough listener defined above, anthropic-version: 2023-06-01)
+  # rather than guessed — one ai_gateway_model per model id Anthropic
+  # actually returned that wasn't covered above yet.
 
   - ref: claude-opus-5
     type: model
