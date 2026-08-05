@@ -28,7 +28,7 @@ reference, with its own README.
 
 - [Architecture](#architecture)
 - [What you'll build](#what-youll-build)
-- [Before you begin](#before-you-begin)
+- [Prerequisites](#prerequisites)
 - [Steps](#steps)
   - [1. Deploy the gateway](#1-deploy-the-gateway)
   - [2. Add Claude models](#2-add-claude-models)
@@ -52,47 +52,68 @@ posture.
 
 ## What you'll build
 
-- One AI Gateway 2.0 control plane, fronting 12 Claude models (Sonnet,
-  Haiku, and Opus variants, plus Fable) behind a single `/anthropic`
-  route, routed to Anthropic directly.
-- Okta SSO — every model requires a valid, signed bearer token.
-- Group-based model visibility and spend limits, both driven by a `team`
-  claim on the Okta access token:
+- One AI Gateway 2.0 control plane that can expose the full Claude model
+  catalog — Sonnet, Haiku, and Opus variants, plus Fable — behind a
+  single `/anthropic` route, routed to Anthropic directly. You choose
+  which models to expose; nothing here caps you to a fixed count.
+- SSO in front of every model, via any OIDC-compliant identity provider.
+  This walkthrough uses Okta, but the same steps work with Entra ID,
+  Auth0, or anything else that speaks OIDC.
+- User- and group-based model visibility — which models a caller can see
+  and call is driven by their identity-provider group, not by who they
+  are individually.
+- Spend limits as their own, separate layer on top of that. Budgets can
+  be scoped per consumer or per group, tracked in dollars (computed from
+  each model's real cost) or in raw tokens, over whatever time window
+  fits your use case. This walkthrough sets a cost-based budget per
+  group, but the policy supports finer- or coarser-grained setups.
 
-| Group | Sees in `/v1/models` | Chat spend budget |
-|-------|----------------------|--------------------|
-| `kong-premium` | all 12 models | $5.00 / 60s |
-| `kong-standard` | 5 Opus-tier models | $1.00 / 60s |
-
-## Before you begin
+## Prerequisites
 
 You'll need:
 
-- A Kong Konnect account with AI Gateway 2.0 enabled.
+- A Kong Konnect account with AI Gateway 2.0 enabled — [sign up for a
+  free trial](https://cloud.konghq.com/register) if you don't have one.
 - A Konnect **Personal Access Token** — profile menu → *Personal access
   tokens* → *Generate*.
-- [`kongctl`](https://developer.konghq.com/kongctl/) 1.8.0 or newer.
-- An Anthropic API key.
-- `jq`, for the vault setup script.
-- Docker, if you're running the data plane locally as shown below.
+- [`kongctl`](https://developer.konghq.com/kongctl/) 1.8.0 or newer,
+  installed and on your `PATH`.
+- An Anthropic API key with access to the models you plan to expose.
+- `jq`, used by the vault bootstrap script.
+- Docker. This walkthrough runs the data plane locally as a container;
+  Kong AI Gateway's data plane also runs on a plain VM or inside
+  Kubernetes if that fits your environment better.
 
-Copy `.env.example` to `.env` and fill in the values above before
-starting.
+Copy the env template and fill in the values above before starting:
+
+```bash
+cp .env.example .env
+```
 
 ### If you're using SSO
 
-Steps 4 and 5 add Okta-based SSO and group-based access. If you want
-these, set up your Okta app before you get there:
+Steps 4 and 5 add SSO and group-based access. Kong AI Gateway's identity
+provider works with any OIDC-compliant provider — this walkthrough uses
+Okta, but the same setup applies to Entra ID or others. If you want SSO,
+set up your OIDC app before you get there:
 
-1. Create an OIDC app in Okta (Web application, Authorization Code grant).
+1. Register an OIDC app with your provider (Web application,
+   Authorization Code grant). See Okta's [OIDC app setup
+   guide](https://developer.okta.com/docs/guides/implement-grant-type/authcode/main/)
+   or Microsoft's [Entra ID app registration
+   quickstart](https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-register-app)
+   for two worked examples.
 2. Add your gateway's data-plane URL as an allowed redirect URI.
 3. Add a custom claim named `team` to the access token, with a value per
    user or group — this example expects `kong-premium` and
-   `kong-standard`.
+   `kong-standard`, which Step 5 uses to tier model visibility and spend
+   by group.
 4. Note the issuer URL, client ID, and client secret for `.env`.
 
 If you don't need SSO, skip Steps 4 and 5 and every model will be open
-once Step 2 is applied.
+once Step 2 is applied. Kong AI Gateway also ships a built-in identity
+provider, so you can still restrict access with simple API keys instead
+of a full OIDC flow.
 
 ## Steps
 
