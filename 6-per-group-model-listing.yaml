@@ -136,16 +136,6 @@ ai_gateways:
         - name: x-api-key
           value: "{vault://claude-gateway-vault/anthropic-api-key}"
 
-  - ref: bedrock-claude
-    name: bedrock-claude
-    display_name: "AWS Bedrock (Claude)"
-    type: bedrock
-    config:
-      auth:
-        type: aws
-        access_key_id: "{vault://claude-gateway-vault/aws-access-key-id}"
-        secret_access_key: "{vault://claude-gateway-vault/aws-secret-access-key}"
-
   policies:
   # Already live, re-declared verbatim so this file's `policies:` key
   # doesn't propose deleting them.

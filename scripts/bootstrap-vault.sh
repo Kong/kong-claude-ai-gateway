@@ -92,8 +92,6 @@ seed_secret() {
 
 seed_secret "anthropic-api-key" "${ANTHROPIC_API_KEY:-}"
 seed_secret "anthropic-api-key-header" "${ANTHROPIC_API_KEY_HEADER:-x-api-key}"
-seed_secret "aws-access-key-id" "${AWS_ACCESS_KEY_ID:-}"
-seed_secret "aws-secret-access-key" "${AWS_SECRET_ACCESS_KEY:-}"
 seed_secret "okta-issuer" "${OKTA_ISSUER:-}"
 seed_secret "okta-client-id" "${OKTA_CLIENT_ID:-}"
 seed_secret "okta-client-secret" "${OKTA_CLIENT_SECRET:-}"

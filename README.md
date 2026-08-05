@@ -1,8 +1,23 @@
 # Kong AI Gateway for Claude
 
-Kong AI Gateway 2.0 in front of Claude (Chat, Cowork, and Code): gate,
-tier, and budget access to Claude models by identity, without changing
-how developers use the products themselves.
+Claude shows up inside an organization in more than one product at
+once — Claude Code on developer laptops, Claude Chat in the browser,
+Cowork for team workflows — each authenticating to Anthropic on its own
+terms. That's fine at small scale, but it leaves no single place to
+answer questions like "which team is burning through Opus budget" or
+"can we cut this contractor's access off today." Kong AI Gateway sits in
+front of all of them as one policy point: it terminates every request on
+its way to Anthropic, checks the caller's identity against your IdP, and
+applies model access and spend limits by group — all without the
+developer changing how they invoke Claude Code, Chat, or Cowork.
+Concretely, that means:
+
+- **Gate** — every request must carry a valid, signed bearer token from
+  your identity provider before it reaches a Claude model.
+- **Tier** — which models a caller can even see (`GET /v1/models`) and
+  use is driven by their identity-provider group.
+- **Budget** — spend limits are enforced per group, in dollars, computed
+  from each model's real input/output token cost.
 
 This is the AI Gateway 2.0 track and the one actively maintained in this
 repo. An earlier build of the same idea on classic Kong Gateway (1.x,
@@ -27,24 +42,7 @@ reference, with its own README.
 
 ## Architecture
 
-```
-┌────────────────────┐
-│   Konnect (cloud)   │
-│  control plane +    │
-│  vault (secrets)    │
-└──────────┬──────────┘
-           │ hybrid mTLS
-           ▼
-┌───────────────┐        ┌──────────────────────┐        ┌────────────────────────┐
-│  Claude Chat /│  HTTPS │   Kong AI Gateway     │  HTTPS │  Anthropic API /       │
-│  Cowork / Code│───────▶│   (data plane)        │───────▶│  AWS Bedrock (Claude)  │
-└───────────────┘        └──────────┬────────────┘        └────────────────────────┘
-                                     │ validates bearer token
-                                     ▼
-                          ┌────────────────────┐
-                          │   Okta (OIDC IdP)   │
-                          └────────────────────┘
-```
+![Kong Konnect architecture](images/Kong%20Konnect%20Architecture-selection.png)
 
 The control plane runs in Konnect; the data plane runs wherever you
 choose (a laptop, your VPC, Kubernetes) and connects back over mTLS. This
@@ -56,8 +54,7 @@ posture.
 
 - One AI Gateway 2.0 control plane, fronting 12 Claude models (Sonnet,
   Haiku, and Opus variants, plus Fable) behind a single `/anthropic`
-  route.
-- Two providers per model: Anthropic direct and AWS Bedrock.
+  route, routed to Anthropic directly.
 - Okta SSO — every model requires a valid, signed bearer token.
 - Group-based model visibility and spend limits, both driven by a `team`
   claim on the Okta access token:
@@ -75,7 +72,7 @@ You'll need:
 - A Konnect **Personal Access Token** — profile menu → *Personal access
   tokens* → *Generate*.
 - [`kongctl`](https://developer.konghq.com/kongctl/) 1.8.0 or newer.
-- An Anthropic API key, and/or AWS credentials with Bedrock access.
+- An Anthropic API key.
 - `jq`, for the vault setup script.
 - Docker, if you're running the data plane locally as shown below.
 
@@ -145,9 +142,9 @@ shows as **Connected** in Konnect within a few seconds.
 
 ### 2. Add Claude models
 
-Adds the model providers and one `ai_gateway_model` per Claude model,
-each behind `/anthropic`, distinguished by the `model` field in the
-request body.
+Adds the model provider and one `ai_gateway_model` per Claude model, each
+behind `/anthropic`, distinguished by the `model` field in the request
+body.
 
 Each provider holds the upstream credential:
 
@@ -206,8 +203,6 @@ changes — it updates in place.
 |-----------|-------------|
 | `anthropic-api-key` | `ANTHROPIC_API_KEY` |
 | `anthropic-api-key-header` | `ANTHROPIC_API_KEY_HEADER` |
-| `aws-access-key-id` | `AWS_ACCESS_KEY_ID` |
-| `aws-secret-access-key` | `AWS_SECRET_ACCESS_KEY` |
 | `okta-issuer` | `OKTA_ISSUER` |
 | `okta-client-id` | `OKTA_CLIENT_ID` |
 | `okta-client-secret` | `OKTA_CLIENT_SECRET` |

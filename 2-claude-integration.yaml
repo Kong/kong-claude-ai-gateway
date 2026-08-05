@@ -38,13 +38,9 @@
 #
 #   - anthropic-direct — Anthropic's own API, authenticated with your
 #     Anthropic API key.
-#   - bedrock-claude    — the same Claude models served through AWS
-#     Bedrock, authenticated with an AWS access key pair. Not currently
-#     wired to any target below (see Status table in README) — add a
-#     second target on a model to use it for failover.
 #
-# Both credentials are {vault://claude-gateway-vault/<key>} references, not
-# literal values — see README.md, Step 3, for how claude-gateway-vault gets
+# This credential is a {vault://claude-gateway-vault/<key>} reference, not
+# a literal value — see README.md, Step 3, for how claude-gateway-vault gets
 # provisioned and seeded. Nothing below this comment is safe to fill in
 # with a real secret; that's the point of the vault indirection.
 #
@@ -90,16 +86,6 @@ ai_gateways:
         headers:
         - name: x-api-key
           value: "{vault://claude-gateway-vault/anthropic-api-key}"
-
-  - ref: bedrock-claude
-    name: bedrock-claude
-    display_name: "AWS Bedrock (Claude)"
-    type: bedrock
-    config:
-      auth:
-        type: aws
-        access_key_id: "{vault://claude-gateway-vault/aws-access-key-id}"
-        secret_access_key: "{vault://claude-gateway-vault/aws-secret-access-key}"
 
   models:
   - ref: claude
