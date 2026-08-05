@@ -19,7 +19,6 @@ Screenshots and diagrams referenced from `README.md`.
   full catalog.
 - `step5-dashboard/` — Konnect console walkthrough for Step 6 (the
   imported usage dashboard).
-
-Add more subdirectories per step as you work through Step 7 (spend-limit
-screens, etc.) and link them with relative paths, e.g.
-`![Spend limit](images/step7-budgets/limit-hit.png)`.
+- `step7-budgets/` — Konnect console walkthrough for Step 7 (the
+  per-group cost budget policy, `tiered-cost-budget`, as it appears under
+  the AI Gateway's **Policies** tab).

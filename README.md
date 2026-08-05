@@ -582,6 +582,8 @@ policies:
 kongctl apply -f 7-rate-limiting-policy.yaml
 ```
 
+![Per-group cost budget policy in Konnect](images/step7-budgets/01-per-group-cost-budget-policy.png)
+
 **Verify:** `kongctl diff -f 7-rate-limiting-policy.yaml` reports no
 changes.
 
