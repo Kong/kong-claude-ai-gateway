@@ -554,8 +554,6 @@ and request visibility across models and consumers. Import it from the
 Konnect UI (**Analytics** → **Dashboards** → **Import**), or apply it via
 the API once you're ready to automate it.
 
-![Dashboard overview](images/step5-dashboard/01-dashboard-overview.png)
-
 ![Dashboard detail — cost, tokens, requests, model/dev breakdowns, and latency](images/step5-dashboard/02-dashboard-detail.png)
 
 ### 7. Set spend limits
