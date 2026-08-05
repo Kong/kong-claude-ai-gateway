@@ -30,9 +30,9 @@ reference, with its own README.
 - [What you'll build](#what-youll-build)
 - [Prerequisites](#prerequisites)
 - [Steps](#steps)
-  - [1. Deploy the gateway](#1-deploy-the-gateway)
-  - [2. Add Claude models](#2-add-claude-models)
-  - [3. Configure the vault](#3-configure-the-vault)
+  - [1. Create the control plane and deploy the gateway](#1-create-the-control-plane-and-deploy-the-gateway)
+  - [2. Configure the vault](#2-configure-the-vault)
+  - [3. Add Claude models](#3-add-claude-models)
   - [4. Enable SSO](#4-enable-sso)
   - [5. Filter models by group](#5-filter-models-by-group)
   - [6. Add a usage dashboard](#6-add-a-usage-dashboard)
@@ -90,6 +90,23 @@ Copy the env template and fill in the values above before starting:
 cp .env.example .env
 ```
 
+`kongctl` (the commands you'll run in every step below) doesn't read
+`.env` on its own — it looks for two specific environment variables,
+`KONGCTL_DEFAULT_KONNECT_PAT` and `KONGCTL_DEFAULT_KONNECT_REGION`. Load
+your `.env` values into those before running any `kongctl apply`/`diff`
+command:
+
+```bash
+set -a && source .env && set +a
+export KONGCTL_DEFAULT_KONNECT_PAT="$KONNECT_TOKEN"
+export KONGCTL_DEFAULT_KONNECT_REGION="$KONNECT_REGION"
+```
+
+Do this once per shell session — `scripts/bootstrap-vault.sh` (Step 2)
+sets these for itself internally, but the `kongctl apply -f ...`
+commands you run directly in Steps 1, 2, 4, 5, and 7 need them exported
+in your own shell.
+
 ### If you're using SSO
 
 Steps 4 and 5 add SSO and group-based access. Kong AI Gateway's identity
@@ -111,20 +128,29 @@ set up your OIDC app before you get there:
 4. Note the issuer URL, client ID, and client secret for `.env`.
 
 If you don't need SSO, skip Steps 4 and 5 and every model will be open
-once Step 2 is applied. Kong AI Gateway also ships a built-in identity
+once Step 3 is applied. Kong AI Gateway also ships a built-in identity
 provider, so you can still restrict access with simple API keys instead
 of a full OIDC flow.
 
 ## Steps
 
-Each step applies one file, cumulatively — every file is the full desired
-state for everything up to that point.
+Each step below applies one numbered YAML file (`1-gateway.yaml`,
+`2-claude-integration.yaml`, and so on) with `kongctl apply -f <file>`.
+These are declarative kongctl configs, not patches: every file is the
+**full desired state** of the control plane for everything up to and
+including that step, so `2-claude-integration.yaml` repeats everything
+`1-gateway.yaml` created and adds the model provider and models on top,
+`3-identity-provider.yaml` repeats that and adds the identity provider,
+and so on. `kongctl apply` reconciles the live control plane to match the
+file exactly — that's also why `git diff` between two consecutive step
+files shows precisely what that step introduced, and why `kongctl diff
+-f <file>` reports no changes once a file has already been applied (the
+"Verify" line under each step below).
 
-### 1. Deploy the gateway
+### 1. Create the control plane and deploy the gateway
 
-Creates the AI Gateway 2.0 control plane.
-
-![AI Gateway created in Konnect](images/step1-deploy/03-ai-gateway-created.png)
+Creates the AI Gateway 2.0 control plane, then connects a data plane to
+it so the gateway can actually proxy traffic.
 
 ```yaml
 ai_gateways:
@@ -136,6 +162,8 @@ ai_gateways:
 ```bash
 kongctl apply -f 1-gateway.yaml
 ```
+
+![AI Gateway created in Konnect](images/step1-deploy/03-ai-gateway-created.png)
 
 Then connect a data plane: in Konnect, open the gateway → **Data plane
 nodes** → **Configure data plane** → **Docker**. This generates a
@@ -159,9 +187,39 @@ docker run -d \
 The data plane proxies traffic on `8000` (HTTP) and `8443` (HTTPS). It
 shows as **Connected** in Konnect within a few seconds.
 
+![Data plane node connected in Konnect](images/step1-deploy/06-dataplane-connected.png)
+
 **Verify:** `kongctl diff -f 1-gateway.yaml` reports no changes.
 
-### 2. Add Claude models
+### 2. Configure the vault
+
+Every credential is referenced as `{vault://claude-gateway-vault/<key>}`,
+never inlined. One command sets up the vault and seeds it from `.env`:
+
+```bash
+scripts/bootstrap-vault.sh
+```
+
+This creates a Konnect config store and vault (if they don't already
+exist) and seeds the following keys. Re-run any time a value in `.env`
+changes — it updates in place.
+
+![Vault with secrets stored](images/step2-vault/02-vault-secrets.png)
+
+| Vault key | From `.env` |
+|-----------|-------------|
+| `anthropic-api-key` | `ANTHROPIC_API_KEY` |
+| `anthropic-api-key-header` | `ANTHROPIC_API_KEY_HEADER` |
+| `okta-issuer` | `OKTA_ISSUER` |
+| `okta-client-id` | `OKTA_CLIENT_ID` |
+| `okta-client-secret` | `OKTA_CLIENT_SECRET` |
+| `oidc-cache-tokens-salt` | `OIDC_CACHE_TOKENS_SALT` |
+
+Doing this before Step 3 means the model provider you add next can
+reference `{vault://claude-gateway-vault/anthropic-api-key}` immediately,
+instead of pointing at a secret that doesn't exist yet.
+
+### 3. Add Claude models
 
 Adds the model provider and one `ai_gateway_model` per Claude model, each
 behind `/anthropic`, distinguished by the `model` field in the request
@@ -202,32 +260,10 @@ models:
 kongctl apply -f 2-claude-integration.yaml
 ```
 
+![Claude models in Konnect](images/step3-models/01-models-list.png)
+
 **Verify:** `kongctl diff -f 2-claude-integration.yaml` reports no
 changes.
-
-### 3. Configure the vault
-
-Every credential is referenced as `{vault://claude-gateway-vault/<key>}`,
-never inlined. One command sets up the vault and seeds it from `.env`:
-
-```bash
-scripts/bootstrap-vault.sh
-```
-
-This creates a Konnect config store and vault (if they don't already
-exist) and seeds the following keys. Re-run any time a value in `.env`
-changes — it updates in place.
-
-![Vault with secrets stored](images/step3-vault/02-vault-secrets.png)
-
-| Vault key | From `.env` |
-|-----------|-------------|
-| `anthropic-api-key` | `ANTHROPIC_API_KEY` |
-| `anthropic-api-key-header` | `ANTHROPIC_API_KEY_HEADER` |
-| `okta-issuer` | `OKTA_ISSUER` |
-| `okta-client-id` | `OKTA_CLIENT_ID` |
-| `okta-client-secret` | `OKTA_CLIENT_SECRET` |
-| `oidc-cache-tokens-salt` | `OIDC_CACHE_TOKENS_SALT` |
 
 ### 4. Enable SSO
 
@@ -356,13 +392,13 @@ changes.
 ├── README.md
 ├── .env.example                    # copy to .env and fill in
 ├── 1-gateway.yaml                   # Step 1
-├── 2-claude-integration.yaml        # Step 2
+├── 2-claude-integration.yaml        # Step 3
 ├── 3-identity-provider.yaml         # Step 4
 ├── 6-per-group-model-listing.yaml   # Step 5
 ├── 5-dashboard.json                 # Step 6
 ├── 7-rate-limiting-policy.yaml      # Step 7
 ├── scripts/
-│   └── bootstrap-vault.sh           # Step 3
+│   └── bootstrap-vault.sh           # Step 2
 ├── images/                          # console screenshots
 ├── secrets/                         # local-only staging for real credentials (git-ignored)
 └── classic-kong-gateway/            # earlier classic-Kong-Gateway (1.x, decK) build
