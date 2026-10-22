@@ -6,8 +6,7 @@ except this file is git-ignored — see `../.gitignore`.
 
 Typical contents (none of these are created by default):
 
-- `claude-gateway.env` — `ANTHROPIC_API_KEY`, `AWS_ACCESS_KEY_ID`,
-  `AWS_SECRET_ACCESS_KEY`, `OKTA_ISSUER`, `OKTA_CLIENT_ID`,
+- `claude-gateway.env` — `ANTHROPIC_API_KEY`, `OKTA_ISSUER`, `OKTA_CLIENT_ID`,
   `OKTA_CLIENT_SECRET`, `OIDC_CACHE_TOKENS_SALT` — see `../.env.example`
   for the full variable list.
 - `tls.crt` / `tls.key` — the data-plane client certificate generated in

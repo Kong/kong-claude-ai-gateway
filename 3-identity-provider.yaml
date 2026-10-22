@@ -1,43 +1,27 @@
 # Step 4 — SSO with OIDC (Okta in this example).
 #
-# (Numbered 3 because Step 2, vault integration, has no kongctl resource of
-# its own — see README.md's step/file mapping table.)
+# (Numbered 3 because Step 2, the vault, has no kongctl resource of its
+# own — see scripts/bootstrap-vault.sh.)
 #
-# Adds a basic OIDC identity provider that requires a valid Okta-issued
-# bearer token — applied as a GLOBAL policy: every model below carries
-# `access.identity_providers: [okta-groups-idp]`, not just one hand-picked
-# model. Group membership (the `team` claim, same claim/values as
-# 6-per-group-model-listing.yaml's mcp_servers demo — `kong-premium`/
-# `kong-standard`) now maps to a real Konnect consumer_group — see the
-# `consumer_groups_claim` note below.
+# Adds an OIDC auth strategy that requires a valid Okta-issued bearer token.
+# Every model below carries `access.auth_strategies: [okta-groups-idp]`, and
+# so does the `anthropic-models-endpoint` agent, so both inference and
+# model discovery need a token. The `team` claim (values `kong-premium` /
+# `kong-standard`) maps onto the consumer_groups below via
+# `consumer_groups_claim`.
 #
-# `consumer_optional: true` means "resolve to an identity provider context
-# even with no matching Consumer record" — this repo never creates a
-# per-user Consumer, so every authenticated caller is anonymous-but-valid
-# from Kong's perspective at this step. Group membership, not individual
-# identity, is what 4-rate-limiting-policy.yaml keys budgets on.
+# `consumer_optional: true` means "authenticate with the IdP even with no
+# matching Consumer record" — this repo never creates per-user Consumers,
+# so group membership, not individual identity, is what
+# 6-rate-limiting-policy.yaml keys budgets on.
 #
-# This file must re-declare the FULL model set from 2-claude-integration.yaml
-# (all 12 models — the original tiers plus every model id cross-checked
-# against the live Anthropic catalog), not just the original single-model
-# draft, per this repo's cumulative-file convention: each file is the full
-# desired state up to that point, and `kongctl apply` never deletes, so a
-# file that dropped models here would still leave them live but re-propose
-# creating a stale duplicate on top — see 1-gateway.yaml's header for the
-# same convention. Model config (targets/providers/route) is unchanged from
-# file 2; only the `access` block is new per model.
+# This file re-declares the FULL model set from 2-claude-integration.yaml
+# (each file is the full desired state up to that step); only the `access`
+# block is new per model.
 #
-# Swap in your own IdP by pointing the vault secrets below at your
-# provider's issuer/client id/secret and changing the group claim name to
-# match your token shape — nothing else in this file is Okta-specific.
-#
-# UNVERIFIED IN THIS REPO: `consumer_groups` as a nested child of
-# `ai_gateways` has not been confirmed against a live schema pull the way
-# `identity_providers`/`model_providers`/`models` have (see
-# ../kong-2.0/03-oidc-okta.yaml for that prior verification). Run
-# `kongctl explain ai_gateways.consumer_groups --extended` against your own
-# kongctl/Konnect environment before applying, and adjust field names if
-# they differ.
+# Swap in your own IdP by pointing the vault secrets at your provider's
+# issuer / client id / secret and changing the group claim name to match
+# your token shape — nothing else in this file is Okta-specific.
 #
 # Preview: kongctl diff -f 3-identity-provider.yaml
 # Apply:   kongctl apply -f 3-identity-provider.yaml
@@ -49,16 +33,16 @@ _defaults:
 ai_gateways:
 - ref: claude-tiered-gateway
   name: claude-tiered-gateway
-  display_name: "Claude Tiered Gateway"
-  description: "Kong AI Gateway 2.0 control plane fronting Claude for the kong-app-gateway-claude example"
+  display_name: "Claude Gateway"
+  description: "Kong AI Gateway control plane fronting Claude for the kong-app-gateway-claude example"
   labels:
     repo: kong-app-gateway-claude
     example: tiered-model-entitlement
 
-  identity_providers:
+  auth_strategies:
   - ref: okta-groups-idp
     name: okta-groups-idp
-    display_name: "Okta OIDC (group claim)"
+    display_name: "Okta OIDC"
     type: openid-connect
     config:
       issuer: "{vault://claude-gateway-vault/okta-issuer}"
@@ -67,66 +51,20 @@ ai_gateways:
       client_secret:
       - "{vault://claude-gateway-vault/okta-client-secret}"
       cache_tokens_salt: "{vault://claude-gateway-vault/oidc-cache-tokens-salt}"
-      # authorization_code + scopes synced from live (added via the Konnect
-      # UI's "Interactive sign-in" test flow, which needs the OAuth
-      # redirect grant, not just bearer-token validation) — kept here so
-      # kongctl apply doesn't revert them.
+      # bearer validates an access token sent by a client; authorization_code
+      # supports the interactive sign-in flow (Konnect UI test, Claude Desktop).
       auth_methods:
       - bearer
       - authorization_code
       scopes:
       - openid
+      # Maps the Okta `team` claim (kong-premium / kong-standard) onto the
+      # consumer_groups below, which the spend limits key on.
+      consumer_groups_claim:
+      - team
       consumer_optional: true
       ssl_verify: true
-      # consumer_groups_claim (maps the `team` claim to a consumer_group by
-      # name) is NOT declared here on purpose — see the comment below.
 
-  # consumer_groups_claim (maps the `team` claim onto a consumer_group by
-  # name) is a supported field on the Kong AI Gateway identity provider
-  # API. It isn't in kongctl's declarative schema yet (`kongctl explain
-  # ai_gateway.identity_providers.config --extended` doesn't list it), so
-  # kongctl can't manage it from this YAML. It's also mutually exclusive
-  # with `consumer_claims`: the API 400s with "only one or none of these
-  # fields must be set: 'consumer_claims', 'consumer_groups_claim'" if
-  # both are set — which is why `consumer_claims` was removed above rather
-  # than kept alongside it.
-  # Set to `["team"]` — the same claim 6-per-group-model-listing.yaml's
-  # pre-function policy already reads directly out of the JWT, confirmed
-  # to carry exactly `kong-premium`/`kong-standard` values in this org's
-  # Okta app (see docs/04-per-user-model-limits.md's decoded token sample).
-  #
-  # IMPORTANT — kongctl apply does a full-replace on this resource: any
-  # field kongctl doesn't know about (this one) gets DROPPED on every
-  # `kongctl apply` of this file, the same way `consumer_groups_optional`
-  # kept disappearing before it was added to the YAML. There is no YAML
-  # fix for a field kongctl's schema doesn't expose at all — the working
-  # sequence is `kongctl apply`, THEN re-run the PUT below:
-  #
-  #   GW=b6adad95-5e80-4fed-b8e9-037cf901c670   # Claude Tiered Gateway
-  #   IDP=e0fa8002-9d8d-46cc-836b-84dfad8803f2  # okta-groups-idp
-  #   kongctl api put "/v1/ai-gateways/${GW}/identity/${IDP}" -f - <<'JSON'
-  #   {
-  #     "name": "okta-groups-idp",
-  #     "display_name": "Okta OIDC (group claim)",
-  #     "type": "openid-connect",
-  #     "config": {
-  #       "issuer": "{vault://claude-gateway-vault/okta-issuer}",
-  #       "client_id": ["{vault://claude-gateway-vault/okta-client-id}"],
-  #       "client_secret": ["{vault://claude-gateway-vault/okta-client-secret}"],
-  #       "cache_tokens_salt": "{vault://claude-gateway-vault/oidc-cache-tokens-salt}",
-  #       "auth_methods": ["bearer", "authorization_code"],
-  #       "scopes": ["openid"],
-  #       "consumer_groups_claim": ["team"],
-  #       "consumer_optional": true,
-  #       "consumer_groups_optional": false,
-  #       "ssl_verify": true
-  #     }
-  #   }
-  #   JSON
-  #
-  # Also note the identity-provider REST path is `/identity`, not
-  # `/identity-providers` — confirmed via `kongctl --log-level trace`,
-  # every other guess 404s.
   consumer_groups:
   - ref: tier-premium
     name: kong-premium
@@ -145,18 +83,13 @@ ai_gateways:
         - name: x-api-key
           value: "{vault://claude-gateway-vault/anthropic-api-key}"
 
-  # `anthropic-models-endpoint` (Step 3) has no `access.identity_providers`
-  # field the way ai_gateway_models do — mcp_servers' `access` block only
-  # supports acl_attribute_type/acls/default_tool_acls (confirmed via
-  # `kongctl explain ai_gateway.mcp_servers.access --extended`), so there's
-  # no declarative way to point it at okta-groups-idp. The fix is to attach
-  # the openid-connect plugin directly as its own policy instead, same
-  # config as the identity_provider above minus authorization_code (this
-  # is a plain GET a client hits directly, not a browser redirect flow).
-  # Without this, GET /anthropic/v1/models stays open to anyone even after
-  # this step locks inference down — re-declared on the mcp_server's
-  # `policies:` list below, alongside `anthropic-add-key`.
   policies:
+  # `add` alone only sets the header if the incoming request doesn't
+  # already carry one with this name — a caller could send their own
+  # x-api-key and `add` would silently leave it in place, forwarding the
+  # wrong (or no) key upstream. `add` + `replace` on the same header
+  # covers both cases: `add` sets it when absent, `replace` overwrites it
+  # when the caller already sent one, so the vault-sourced key always wins.
   - ref: anthropic-add-key
     name: anthropic-add-key
     display_name: "anthropic-add-key"
@@ -171,32 +104,15 @@ ai_gateways:
         headers:
         - "{vault://claude-gateway-vault/anthropic-api-key-header}"
 
-  - ref: okta-models-auth
-    name: okta-models-auth
-    display_name: "Okta OIDC (models endpoint)"
-    type: openid-connect
-    enabled: true
-    global: false
-    config:
-      issuer: "{vault://claude-gateway-vault/okta-issuer}"
-      client_id:
-      - "{vault://claude-gateway-vault/okta-client-id}"
-      client_secret:
-      - "{vault://claude-gateway-vault/okta-client-secret}"
-      cache_tokens_salt: "{vault://claude-gateway-vault/oidc-cache-tokens-salt}"
-      auth_methods:
-      - bearer
-      consumer_optional: true
-      ssl_verify: true
-
-  mcp_servers:
+  agents:
   - ref: anthropic-models-endpoint
     name: anthropic-models-endpoint
-    display_name: "anthropic-models endpoint"
-    type: passthrough-listener
+    display_name: "Anthropic models endpoint"
+    type: http
     enabled: true
     access:
-      acl_attribute_type: consumer
+      auth_strategies:
+      - okta-groups-idp
     config:
       url: https://api.anthropic.com/v1/models
       route:
@@ -207,13 +123,8 @@ ai_gateways:
         - https
       logging:
         payloads: false
-        audits: false
-      server:
-        forward_client_headers: false
-        timeout: 10000
       max_request_body_size: 8388608
     policies:
-    - okta-models-auth
     - anthropic-add-key
 
   models:
@@ -227,7 +138,7 @@ ai_gateways:
     capabilities:
     - generate
     access:
-      identity_providers:
+      auth_strategies:
       - okta-groups-idp
     config:
       route:
@@ -237,8 +148,8 @@ ai_gateways:
         - http
         - https
         model:
-          body:
-            model:
+          body_param: model
+          values:
             - claude-sonnet-4-5
       model:
         name_header: true
@@ -262,7 +173,7 @@ ai_gateways:
     capabilities:
     - generate
     access:
-      identity_providers:
+      auth_strategies:
       - okta-groups-idp
     config:
       route:
@@ -272,8 +183,8 @@ ai_gateways:
         - http
         - https
         model:
-          body:
-            model:
+          body_param: model
+          values:
             - claude-sonnet-5
       model:
         name_header: true
@@ -297,7 +208,7 @@ ai_gateways:
     capabilities:
     - generate
     access:
-      identity_providers:
+      auth_strategies:
       - okta-groups-idp
     config:
       route:
@@ -307,8 +218,8 @@ ai_gateways:
         - http
         - https
         model:
-          body:
-            model:
+          body_param: model
+          values:
             - claude-haiku-4-5-20251001
       model:
         name_header: true
@@ -334,7 +245,7 @@ ai_gateways:
     capabilities:
     - generate
     access:
-      identity_providers:
+      auth_strategies:
       - okta-groups-idp
     config:
       route:
@@ -344,8 +255,8 @@ ai_gateways:
         - http
         - https
         model:
-          body:
-            model:
+          body_param: model
+          values:
             - claude-opus-4-8
       model:
         name_header: true
@@ -361,7 +272,7 @@ ai_gateways:
 
   # Everything below was cross-checked against the live Anthropic model
   # catalog (GET /anthropic/v1/models via the anthropic-models-endpoint
-  # passthrough listener, anthropic-version: 2023-06-01) rather than
+  # agent, anthropic-version: 2023-06-01) rather than
   # guessed — one ai_gateway_model per model id Anthropic actually
   # returned that wasn't covered above yet.
 
@@ -375,7 +286,7 @@ ai_gateways:
     capabilities:
     - generate
     access:
-      identity_providers:
+      auth_strategies:
       - okta-groups-idp
     config:
       route:
@@ -385,8 +296,8 @@ ai_gateways:
         - http
         - https
         model:
-          body:
-            model:
+          body_param: model
+          values:
             - claude-opus-5
       model:
         name_header: true
@@ -410,7 +321,7 @@ ai_gateways:
     capabilities:
     - generate
     access:
-      identity_providers:
+      auth_strategies:
       - okta-groups-idp
     config:
       route:
@@ -420,8 +331,8 @@ ai_gateways:
         - http
         - https
         model:
-          body:
-            model:
+          body_param: model
+          values:
             - claude-fable-5
       model:
         name_header: true
@@ -433,11 +344,157 @@ ai_gateways:
         type: anthropic
         version: "2023-06-01"
         # No pricing precedent for this model anywhere in this repo (unlike
-        # Opus/Sonnet/Haiku, which mirror 4-rate-limiting-policy.yaml's
+        # Opus/Sonnet/Haiku, which mirror the tiers in 6-rate-limiting-policy.yaml's
         # tiers) — priced provisionally at Opus-tier as a pure guess. Replace
         # with real Anthropic pricing before this feeds any real budget.
         input_cost: 15    # USD / million input tokens — placeholder, replace with current pricing
         output_cost: 75   # USD / million output tokens — placeholder, replace with current pricing
+
+  - ref: claude-opus-5-5
+    type: model
+    name: claude-opus-5-5
+    display_name: "Claude Opus 5.5"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    access:
+      auth_strategies:
+      - okta-groups-idp
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body_param: model
+          values:
+            - claude-opus-5-5
+      model:
+        name_header: true
+    targets:
+    - name: claude-opus-5-5
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 15    # USD / million input tokens — placeholder, replace with current pricing
+        output_cost: 75   # USD / million output tokens — placeholder, replace with current pricing
+
+  - ref: claude-sonnet-5-5
+    type: model
+    name: claude-sonnet-5-5
+    display_name: "Claude Sonnet 5.5"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    access:
+      auth_strategies:
+      - okta-groups-idp
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body_param: model
+          values:
+            - claude-sonnet-5-5
+      model:
+        name_header: true
+    targets:
+    - name: claude-sonnet-5-5
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 5    # USD / million input tokens — placeholder, replace with current pricing
+        output_cost: 15   # USD / million output tokens — placeholder, replace with current pricing
+
+  - ref: claude-fable-5-1
+    type: model
+    name: claude-fable-5-1
+    display_name: "Claude Fable 5.1"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    access:
+      auth_strategies:
+      - okta-groups-idp
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body_param: model
+          values:
+            - claude-fable-5-1
+      model:
+        name_header: true
+    targets:
+    - name: claude-fable-5-1
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        # No pricing precedent for this model anywhere in this repo (unlike
+        # Opus/Sonnet/Haiku, which mirror the tiers in 6-rate-limiting-policy.yaml's
+        # tiers) — priced provisionally at Opus-tier as a pure guess. Replace
+        # with real Anthropic pricing before this feeds any real budget.
+        input_cost: 15    # USD / million input tokens — placeholder, replace with current pricing
+        output_cost: 75   # USD / million output tokens — placeholder, replace with current pricing
+
+  - ref: claude-haiku-5-5
+    type: model
+    name: claude-haiku-5-5
+    display_name: "Claude Haiku 5.5"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    access:
+      auth_strategies:
+      - okta-groups-idp
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body_param: model
+          values:
+            - claude-haiku-5-5
+      model:
+        name_header: true
+      logging:
+        payloads: true
+    targets:
+    - name: claude-haiku-5-5
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 0.8    # USD / million input tokens — placeholder, replace with current pricing
+        output_cost: 4   # USD / million output tokens — placeholder, replace with current pricing
 
   - ref: claude-opus-4-7
     type: model
@@ -449,7 +506,7 @@ ai_gateways:
     capabilities:
     - generate
     access:
-      identity_providers:
+      auth_strategies:
       - okta-groups-idp
     config:
       route:
@@ -459,8 +516,8 @@ ai_gateways:
         - http
         - https
         model:
-          body:
-            model:
+          body_param: model
+          values:
             - claude-opus-4-7
       model:
         name_header: true
@@ -484,7 +541,7 @@ ai_gateways:
     capabilities:
     - generate
     access:
-      identity_providers:
+      auth_strategies:
       - okta-groups-idp
     config:
       route:
@@ -494,8 +551,8 @@ ai_gateways:
         - http
         - https
         model:
-          body:
-            model:
+          body_param: model
+          values:
             - claude-sonnet-4-6
       model:
         name_header: true
@@ -519,7 +576,7 @@ ai_gateways:
     capabilities:
     - generate
     access:
-      identity_providers:
+      auth_strategies:
       - okta-groups-idp
     config:
       route:
@@ -529,8 +586,8 @@ ai_gateways:
         - http
         - https
         model:
-          body:
-            model:
+          body_param: model
+          values:
             - claude-opus-4-6
       model:
         name_header: true
@@ -554,7 +611,7 @@ ai_gateways:
     capabilities:
     - generate
     access:
-      identity_providers:
+      auth_strategies:
       - okta-groups-idp
     config:
       route:
@@ -566,8 +623,8 @@ ai_gateways:
         model:
           # Dated id, exactly as returned by GET /v1/models — this
           # release doesn't have an undated alias upstream.
-          body:
-            model:
+          body_param: model
+          values:
             - claude-opus-4-5-20251101
       model:
         name_header: true
@@ -591,7 +648,7 @@ ai_gateways:
     capabilities:
     - generate
     access:
-      identity_providers:
+      auth_strategies:
       - okta-groups-idp
     config:
       route:
@@ -604,8 +661,8 @@ ai_gateways:
           # Distinct from the "claude" model's "claude-sonnet-4-5" alias
           # above (the undated shorthand some older clients send) — this
           # one matches the exact dated id Anthropic's API itself uses.
-          body:
-            model:
+          body_param: model
+          values:
             - claude-sonnet-4-5-20250929
       model:
         name_header: true
@@ -629,7 +686,7 @@ ai_gateways:
     capabilities:
     - generate
     access:
-      identity_providers:
+      auth_strategies:
       - okta-groups-idp
     config:
       route:
@@ -639,8 +696,8 @@ ai_gateways:
         - http
         - https
         model:
-          body:
-            model:
+          body_param: model
+          values:
             - claude-opus-4-1-20250805
       model:
         name_header: true

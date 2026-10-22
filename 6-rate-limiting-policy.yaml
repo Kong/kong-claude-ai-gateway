@@ -1,0 +1,759 @@
+# Step 6 — per-group cost budgets via ai-rate-limiting-advanced, on GROUPS
+# not individual consumers.
+#
+# Re-declares everything from 3-identity-provider.yaml (SSO) and adds ONE
+# new policy, `tiered-cost-budget`, attached to every model.
+#
+# Groups come from the Okta `team` claim: `consumer_groups_claim: [team]`
+# on the auth strategy maps it onto the `kong-premium` / `kong-standard`
+# consumer groups below.
+#
+# Budgets are keyed on the group: `identifier: consumer-group` (top-level)
+# plus `policies[].match[].type: consumer_group` (note the hyphen/underscore
+# split — easy to get backwards, fails silently). There are no per-user
+# Consumers (`consumer_optional: true`), so a group is the only identity a
+# budget can key on.
+#
+# Budgets are COST-based, not token-based: `tokens_count_strategy: cost`
+# makes `limit` a USD ceiling per window, computed from each target's
+# input_cost/output_cost (set in 2-claude-integration.yaml — a target with
+# those unset contributes 0 and the limit never trips). Models span a wide
+# price range, so a token ceiling would mean very different real budgets
+# depending on the model a caller picks.
+#
+#   group           budget/min
+#   kong-premium    $5.00
+#   kong-standard   $1.00
+#
+# This caps spend per group across every model equally; it does not
+# restrict WHICH models a group can call.
+#
+# Preview: kongctl diff -f 6-rate-limiting-policy.yaml
+# Apply:   kongctl apply -f 6-rate-limiting-policy.yaml
+
+_defaults:
+  kongctl:
+    namespace: kong-app-gateway-claude
+
+ai_gateways:
+- ref: claude-tiered-gateway
+  name: claude-tiered-gateway
+  display_name: "Claude Gateway"
+  description: "Kong AI Gateway control plane fronting Claude for the kong-app-gateway-claude example"
+  labels:
+    repo: kong-app-gateway-claude
+    example: tiered-model-entitlement
+
+  auth_strategies:
+  - ref: okta-groups-idp
+    name: okta-groups-idp
+    display_name: "Okta OIDC"
+    type: openid-connect
+    config:
+      issuer: "{vault://claude-gateway-vault/okta-issuer}"
+      client_id:
+      - "{vault://claude-gateway-vault/okta-client-id}"
+      client_secret:
+      - "{vault://claude-gateway-vault/okta-client-secret}"
+      cache_tokens_salt: "{vault://claude-gateway-vault/oidc-cache-tokens-salt}"
+      # bearer validates an access token sent by a client; authorization_code
+      # supports the interactive sign-in flow (Konnect UI test, Claude Desktop).
+      auth_methods:
+      - bearer
+      - authorization_code
+      scopes:
+      - openid
+      # Maps the Okta `team` claim (kong-premium / kong-standard) onto the
+      # consumer_groups below, which the spend limits key on.
+      consumer_groups_claim:
+      - team
+      consumer_optional: true
+      ssl_verify: true
+
+  consumer_groups:
+  - ref: tier-premium
+    name: kong-premium
+  - ref: tier-standard
+    name: kong-standard
+
+  model_providers:
+  - ref: anthropic-direct
+    name: anthropic-direct
+    display_name: "Anthropic (direct key)"
+    type: anthropic
+    config:
+      auth:
+        type: basic
+        headers:
+        - name: x-api-key
+          value: "{vault://claude-gateway-vault/anthropic-api-key}"
+
+  policies:
+  # `add` alone only sets the header if the incoming request doesn't
+  # already carry one with this name — a caller could send their own
+  # x-api-key and `add` would silently leave it in place, forwarding the
+  # wrong (or no) key upstream. `add` + `replace` on the same header
+  # covers both cases: `add` sets it when absent, `replace` overwrites it
+  # when the caller already sent one, so the vault-sourced key always wins.
+  - ref: anthropic-add-key
+    name: anthropic-add-key
+    display_name: "anthropic-add-key"
+    type: request-transformer-advanced
+    enabled: true
+    global: false
+    config:
+      add:
+        headers:
+        - "{vault://claude-gateway-vault/anthropic-api-key-header}"
+      replace:
+        headers:
+        - "{vault://claude-gateway-vault/anthropic-api-key-header}"
+
+  - ref: tiered-cost-budget
+    name: tiered-cost-budget
+    display_name: "Per-group cost budget"
+    type: ai-rate-limiting-advanced
+    enabled: true
+    global: false
+    config:
+      identifier: consumer-group
+      strategy: local     # per-DP counters; N data planes = N x limit.
+                           # switch to redis (host+port) for a shared,
+                           # multi-DP-accurate budget.
+      policies:
+      - match:
+        - type: consumer_group
+          values: [kong-premium]
+        window_type: sliding
+        limits:
+        - limit: 5.0        # USD per window, not tokens
+          window_size: 60
+          tokens_count_strategy: cost
+      - match:
+        - type: consumer_group
+          values: [kong-standard]
+        window_type: sliding
+        limits:
+        - limit: 1.0
+          window_size: 60
+          tokens_count_strategy: cost
+
+  agents:
+  - ref: anthropic-models-endpoint
+    name: anthropic-models-endpoint
+    display_name: "Anthropic models endpoint"
+    type: http
+    enabled: true
+    access:
+      auth_strategies:
+      - okta-groups-idp
+    config:
+      url: https://api.anthropic.com/v1/models
+      route:
+        paths:
+        - /anthropic/v1/models
+        protocols:
+        - http
+        - https
+      logging:
+        payloads: false
+      max_request_body_size: 8388608
+    policies:
+    - anthropic-add-key
+
+  models:
+  - ref: claude
+    type: model
+    name: claude
+    display_name: "Claude"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    access:
+      auth_strategies:
+      - okta-groups-idp
+    policies:
+    - tiered-cost-budget
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body_param: model
+          values:
+            - claude-sonnet-4-5
+      model:
+        name_header: true
+    targets:
+    - name: claude-sonnet-5
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 5
+        output_cost: 15
+
+  - ref: claude-sonnet-5
+    type: model
+    name: claude-sonnet-5
+    display_name: "Claude Sonnet 5"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    access:
+      auth_strategies:
+      - okta-groups-idp
+    policies:
+    - tiered-cost-budget
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body_param: model
+          values:
+            - claude-sonnet-5
+      model:
+        name_header: true
+    targets:
+    - name: claude-sonnet-5
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 5
+        output_cost: 15
+
+  - ref: claude-haiku
+    type: model
+    name: claude-haiku
+    display_name: "Claude Haiku"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    access:
+      auth_strategies:
+      - okta-groups-idp
+    policies:
+    - tiered-cost-budget
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body_param: model
+          values:
+            - claude-haiku-4-5-20251001
+      model:
+        name_header: true
+      logging:
+        payloads: true
+    targets:
+    - name: claude-haiku-4-5-20251001
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 0.8
+        output_cost: 4
+
+  - ref: claude-opus
+    type: model
+    name: claude-opus
+    display_name: "Claude Opus"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    access:
+      auth_strategies:
+      - okta-groups-idp
+    policies:
+    - tiered-cost-budget
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body_param: model
+          values:
+            - claude-opus-4-8
+      model:
+        name_header: true
+    targets:
+    - name: claude-opus-4-8
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 15
+        output_cost: 75
+
+  - ref: claude-opus-5
+    type: model
+    name: claude-opus-5
+    display_name: "Claude Opus 5"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    access:
+      auth_strategies:
+      - okta-groups-idp
+    policies:
+    - tiered-cost-budget
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body_param: model
+          values:
+            - claude-opus-5
+      model:
+        name_header: true
+    targets:
+    - name: claude-opus-5
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 15
+        output_cost: 75
+
+  - ref: claude-fable-5
+    type: model
+    name: claude-fable-5
+    display_name: "Claude Fable 5"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    access:
+      auth_strategies:
+      - okta-groups-idp
+    policies:
+    - tiered-cost-budget
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body_param: model
+          values:
+            - claude-fable-5
+      model:
+        name_header: true
+    targets:
+    - name: claude-fable-5
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 15
+        output_cost: 75
+
+  - ref: claude-opus-5-5
+    type: model
+    name: claude-opus-5-5
+    display_name: "Claude Opus 5.5"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    access:
+      auth_strategies:
+      - okta-groups-idp
+    policies:
+    - tiered-cost-budget
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body_param: model
+          values:
+            - claude-opus-5-5
+      model:
+        name_header: true
+    targets:
+    - name: claude-opus-5-5
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 15
+        output_cost: 75
+
+  - ref: claude-sonnet-5-5
+    type: model
+    name: claude-sonnet-5-5
+    display_name: "Claude Sonnet 5.5"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    access:
+      auth_strategies:
+      - okta-groups-idp
+    policies:
+    - tiered-cost-budget
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body_param: model
+          values:
+            - claude-sonnet-5-5
+      model:
+        name_header: true
+    targets:
+    - name: claude-sonnet-5-5
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 5
+        output_cost: 15
+
+  - ref: claude-fable-5-1
+    type: model
+    name: claude-fable-5-1
+    display_name: "Claude Fable 5.1"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    access:
+      auth_strategies:
+      - okta-groups-idp
+    policies:
+    - tiered-cost-budget
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body_param: model
+          values:
+            - claude-fable-5-1
+      model:
+        name_header: true
+    targets:
+    - name: claude-fable-5-1
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 15
+        output_cost: 75
+
+  - ref: claude-haiku-5-5
+    type: model
+    name: claude-haiku-5-5
+    display_name: "Claude Haiku 5.5"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    access:
+      auth_strategies:
+      - okta-groups-idp
+    policies:
+    - tiered-cost-budget
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body_param: model
+          values:
+            - claude-haiku-5-5
+      model:
+        name_header: true
+      logging:
+        payloads: true
+    targets:
+    - name: claude-haiku-5-5
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 0.8
+        output_cost: 4
+
+  - ref: claude-opus-4-7
+    type: model
+    name: claude-opus-4-7
+    display_name: "Claude Opus 4.7"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    access:
+      auth_strategies:
+      - okta-groups-idp
+    policies:
+    - tiered-cost-budget
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body_param: model
+          values:
+            - claude-opus-4-7
+      model:
+        name_header: true
+    targets:
+    - name: claude-opus-4-7
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 15
+        output_cost: 75
+
+  - ref: claude-sonnet-4-6
+    type: model
+    name: claude-sonnet-4-6
+    display_name: "Claude Sonnet 4.6"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    access:
+      auth_strategies:
+      - okta-groups-idp
+    policies:
+    - tiered-cost-budget
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body_param: model
+          values:
+            - claude-sonnet-4-6
+      model:
+        name_header: true
+    targets:
+    - name: claude-sonnet-4-6
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 5
+        output_cost: 15
+
+  - ref: claude-opus-4-6
+    type: model
+    name: claude-opus-4-6
+    display_name: "Claude Opus 4.6"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    access:
+      auth_strategies:
+      - okta-groups-idp
+    policies:
+    - tiered-cost-budget
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body_param: model
+          values:
+            - claude-opus-4-6
+      model:
+        name_header: true
+    targets:
+    - name: claude-opus-4-6
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 15
+        output_cost: 75
+
+  - ref: claude-opus-4-5
+    type: model
+    name: claude-opus-4-5
+    display_name: "Claude Opus 4.5"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    access:
+      auth_strategies:
+      - okta-groups-idp
+    policies:
+    - tiered-cost-budget
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body_param: model
+          values:
+            - claude-opus-4-5-20251101
+      model:
+        name_header: true
+    targets:
+    - name: claude-opus-4-5-20251101
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 15
+        output_cost: 75
+
+  - ref: claude-sonnet-4-5-20250929
+    type: model
+    name: claude-sonnet-4-5-20250929
+    display_name: "Claude Sonnet 4.5 (dated)"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    access:
+      auth_strategies:
+      - okta-groups-idp
+    policies:
+    - tiered-cost-budget
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body_param: model
+          values:
+            - claude-sonnet-4-5-20250929
+      model:
+        name_header: true
+    targets:
+    - name: claude-sonnet-4-5-20250929
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 5
+        output_cost: 15
+
+  - ref: claude-opus-4-1-20250805
+    type: model
+    name: claude-opus-4-1-20250805
+    display_name: "Claude Opus 4.1"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    access:
+      auth_strategies:
+      - okta-groups-idp
+    policies:
+    - tiered-cost-budget
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body_param: model
+          values:
+            - claude-opus-4-1-20250805
+      model:
+        name_header: true
+    targets:
+    - name: claude-opus-4-1-20250805
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 15
+        output_cost: 75

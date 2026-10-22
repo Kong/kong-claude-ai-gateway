@@ -8,21 +8,17 @@ answer questions like "which team is burning through Opus budget" or
 "can we cut this contractor's access off today." Kong AI Gateway sits in
 front of all of them as one policy point: it terminates every request on
 its way to Anthropic, checks the caller's identity against your IdP, and
-applies model access and spend limits by group — all without the
-developer changing how they invoke Claude Code, Chat, or Cowork.
+applies spend limits by group — all without the developer changing how
+they invoke Claude Code, Chat, or Cowork.
 Concretely, that means:
 
 - **Gate** — every request must carry a valid, signed bearer token from
   your identity provider before it reaches a Claude model.
-- **Tier** — which models a caller can even see (`GET /v1/models`) and
-  use is driven by their identity-provider group.
 - **Budget** — spend limits are enforced per group, in dollars, computed
   from each model's real input/output token cost.
 
-This is the AI Gateway 2.0 track and the one actively maintained in this
-repo. An earlier build of the same idea on classic Kong Gateway (1.x,
-decK-based) lives in [`classic-kong-gateway/`](classic-kong-gateway/) for
-reference, with its own README.
+This walkthrough targets Kong AI Gateway 2.2 and is configured
+declaratively with `kongctl`.
 
 ## Contents
 
@@ -34,9 +30,8 @@ reference, with its own README.
   - [2. Configure the vault](#2-configure-the-vault)
   - [3. Add Claude models](#3-add-claude-models)
   - [4. Enable SSO](#4-enable-sso)
-  - [5. Filter models by group](#5-filter-models-by-group)
-  - [6. Add a usage dashboard](#6-add-a-usage-dashboard)
-  - [7. Set spend limits](#7-set-spend-limits)
+  - [5. Add a usage dashboard](#5-add-a-usage-dashboard)
+  - [6. Set spend limits](#6-set-spend-limits)
 - [Repo layout](#repo-layout)
 - [Secrets](#secrets)
 
@@ -52,16 +47,14 @@ posture.
 
 ## What you'll build
 
-- One AI Gateway 2.0 control plane that can expose the full Claude model
-  catalog — Sonnet, Haiku, and Opus variants, plus Fable — behind a
+- One AI Gateway control plane that can expose the full Claude model
+  catalog — Sonnet, Haiku, and Opus variants, plus Fable, including the
+  5.5 generation (Opus 5.5, Sonnet 5.5, Haiku 5.5) and Fable 5.1 — behind a
   single `/anthropic` route, routed to Anthropic directly. You choose
   which models to expose; nothing here caps you to a fixed count.
 - SSO in front of every model, via any OIDC-compliant identity provider.
   This walkthrough uses Okta, but the same steps work with Entra ID,
   Auth0, or anything else that speaks OIDC.
-- User- and group-based model visibility — which models a caller can see
-  and call is driven by their identity-provider group, not by who they
-  are individually.
 - Spend limits as their own, separate layer on top of that. Budgets can
   be scoped per consumer or per group, tracked in dollars (computed from
   each model's real cost) or in raw tokens, over whatever time window
@@ -72,11 +65,11 @@ posture.
 
 You'll need:
 
-- A Kong Konnect account with AI Gateway 2.0 enabled — [sign up for a
+- A Kong Konnect account with AI Gateway enabled — [sign up for a
   free trial](https://cloud.konghq.com/register) if you don't have one.
 - A Konnect **Personal Access Token** — profile menu → *Personal access
   tokens* → *Generate*.
-- [`kongctl`](https://developer.konghq.com/kongctl/) 1.10.0 or newer,
+- [`kongctl`](https://developer.konghq.com/kongctl/) 1.20.0 or newer,
   installed and on your `PATH`.
 - An Anthropic API key with access to the models you plan to expose.
 - `jq`, used by the vault bootstrap script.
@@ -104,14 +97,14 @@ export KONGCTL_DEFAULT_KONNECT_REGION="$KONNECT_REGION"
 
 Do this once per shell session — `scripts/bootstrap-vault.sh` (Step 2)
 sets these for itself internally, but the `kongctl apply -f ...`
-commands you run directly in Steps 1, 2, 4, 5, and 7 need them exported
+commands you run directly in Steps 1, 3, 4, and 6 need them exported
 in your own shell.
 
 ### If you're using SSO
 
-Steps 4 and 5 add SSO and group-based access. Kong AI Gateway's identity
-provider works with any OIDC-compliant provider — this walkthrough uses
-Okta, but the same setup applies to Entra ID or others. If you want SSO,
+Step 4 adds SSO, and Step 6 uses the caller's group for spend limits.
+Kong AI Gateway's OIDC auth strategy works with any OIDC-compliant
+provider — this walkthrough uses Okta, but the same setup applies to Entra ID or others. If you want SSO,
 set up your OIDC app before you get there:
 
 1. Register an OIDC app with your provider (Web application,
@@ -122,19 +115,19 @@ set up your OIDC app before you get there:
    for two worked examples.
 2. Add your gateway's data-plane URL as an allowed redirect URI — this is
    what Konnect's own "Interactive sign-in" test flow uses. If you also
-   want to test with a native client like Claude Desktop, add
-   `http://127.0.0.1:53180/callback` too — that's the fixed loopback port
-   Desktop's OIDC flow listens on for its own callback (see Step 4's
-   "Test it with a real client").
+   want to test with a native client like Claude Desktop, add its loopback
+   callback too: `http://localhost:8765/callback` — Claude Desktop listens
+   on that port for the sign-in callback (see Step 4's "Test it with a real
+   client").
 3. Add a custom claim named `team` to the access token, with a value per
    user or group — this example expects `kong-premium` and
-   `kong-standard`, which Step 5 uses to tier model visibility and spend
+   `kong-standard`, which Step 6 uses to set spend limits
    by group.
 4. Note the issuer URL, client ID, and client secret for `.env`.
 
-If you don't need SSO, skip Steps 4 and 5 and every model will be open
-once Step 3 is applied. Kong AI Gateway also ships a built-in identity
-provider, so you can still restrict access with simple API keys instead
+If you don't need SSO, skip Step 4 and every model will be open
+once Step 3 is applied. Kong AI Gateway also supports a `key-auth` auth
+strategy, so you can still restrict access with simple API keys instead
 of a full OIDC flow.
 
 ## Steps
@@ -150,18 +143,20 @@ and so on. `kongctl apply` reconciles the live control plane to match the
 file exactly — that's also why `git diff` between two consecutive step
 files shows precisely what that step introduced, and why `kongctl diff
 -f <file>` reports no changes once a file has already been applied (the
-"Verify" line under each step below).
+"Verify" line under each step below). Because the files are cumulative, a
+`kongctl diff` on an earlier file only comes back clean right after you
+apply it, not once a later step is live.
 
 ### 1. Create the control plane and deploy the gateway
 
-Creates the AI Gateway 2.0 control plane, then connects a data plane to
+Creates the AI Gateway control plane, then connects a data plane to
 it so the gateway can actually proxy traffic.
 
 ```yaml
 ai_gateways:
 - ref: claude-tiered-gateway
   name: claude-tiered-gateway
-  display_name: "Claude Tiered Gateway"
+  display_name: "Claude Gateway"
 ```
 
 ```bash
@@ -170,23 +165,33 @@ kongctl apply -f 1-gateway.yaml
 
 ![AI Gateway created in Konnect](images/step1-deploy/03-ai-gateway-created.png)
 
-Then connect a data plane: in Konnect, open the gateway → **Data plane
-nodes** → **Configure data plane** → **Docker**. This generates a
-`docker run` command with your control plane's endpoints and a short-lived
-client certificate — copy and run it:
+Then connect a data plane. Either use the Konnect UI (open the gateway →
+**Data plane nodes** → **Configure data plane** → **Docker**, which
+generates the `docker run` command for you), or do it from the CLI:
 
 ```bash
-docker run -d \
-  -e "KONG_ROLE=data_plane" \
-  -e "KONG_DATABASE=off" \
-  -e "KONG_CLUSTER_MTLS=pki" \
-  -e "KONG_CLUSTER_CONTROL_PLANE=<control-plane-host>:443" \
-  -e "KONG_CLUSTER_SERVER_NAME=<control-plane-host>" \
-  -e "KONG_CLUSTER_TELEMETRY_ENDPOINT=<telemetry-host>:443" \
-  -e "KONG_CLUSTER_TELEMETRY_SERVER_NAME=<telemetry-host>" \
-  -e "KONG_CLUSTER_CERT=..." \
-  -e "KONG_CLUSTER_CERT_KEY=..." \
-  kong/kong-ai-gateway-dev:2.0.1-rc.5
+GW=$(kongctl get ai-gateway -o json | jq -r '.[] | select(.display_name=="Claude Gateway") | .id')
+CP=$(kongctl get ai-gateway -o json | jq -r '.[] | select(.id=="'$GW'") | .endpoints.configuration' | sed 's|https://||')
+TP=$(kongctl get ai-gateway -o json | jq -r '.[] | select(.id=="'$GW'") | .endpoints.telemetry' | sed 's|https://||')
+
+# Generate a client certificate and register it with the control plane
+openssl req -new -x509 -nodes -newkey rsa:2048 -subj "/CN=kong_clustering" \
+  -keyout secrets/tls.key -out secrets/tls.crt -days 365
+kongctl api post "/v1/ai-gateways/${GW}/data-plane-certificates" \
+  title=local-dp "cert=$(cat secrets/tls.crt)"
+
+docker run -d --name claude-aigw-dp -p 8000:8000 -p 8443:8443 \
+  -e KONG_ROLE=data_plane \
+  -e KONG_DATABASE=off \
+  -e KONG_CLUSTER_MTLS=pki \
+  -e KONG_CLUSTER_CONTROL_PLANE="${CP}:443" \
+  -e KONG_CLUSTER_SERVER_NAME="${CP}" \
+  -e KONG_CLUSTER_TELEMETRY_ENDPOINT="${TP}:443" \
+  -e KONG_CLUSTER_TELEMETRY_SERVER_NAME="${TP}" \
+  -e KONG_CLUSTER_CERT="$(cat secrets/tls.crt)" \
+  -e KONG_CLUSTER_CERT_KEY="$(cat secrets/tls.key)" \
+  -e KONG_LUA_SSL_TRUSTED_CERTIFICATE=system \
+  kong/kong-ai-gateway:2.2.0
 ```
 
 The data plane proxies traffic on `8000` (HTTP) and `8443` (HTTPS). It
@@ -244,7 +249,7 @@ model_providers:
 ```
 
 Each model picks a target model id from the request body, and carries the
-cost fields Step 7's spend limits are computed from:
+cost fields Step 6's spend limits are computed from:
 
 ```yaml
 models:
@@ -252,8 +257,8 @@ models:
   config:
     route:
       model:
-        body:
-          model: [claude-opus-4-8]
+        body_param: model
+        values: [claude-opus-4-8]
   targets:
   - provider: anthropic-direct
     config:
@@ -263,9 +268,9 @@ models:
 
 `ai_gateway_model`s above only route inference calls (`POST`, matched on
 the `model` field in the request body) — a model *list* request has no
-body to match on, so `GET /anthropic/v1/models` needs its own passthrough
-listener, plus a policy to inject the Anthropic key on the way out. That
-policy sets the header both ways — `add` covers a caller that sends none,
+body to match on, so `GET /anthropic/v1/models` needs its own agent
+(a plain HTTP passthrough to Anthropic), plus a policy to inject the
+Anthropic key on the way out. That policy sets the header both ways — `add` covers a caller that sends none,
 `replace` overwrites one a caller already sent — so the real key always
 wins either way:
 
@@ -281,9 +286,9 @@ policies:
       headers:
       - "{vault://claude-gateway-vault/anthropic-api-key-header}"
 
-mcp_servers:
+agents:
 - ref: anthropic-models-endpoint
-  type: passthrough-listener
+  type: http
   config:
     url: https://api.anthropic.com/v1/models
     route:
@@ -292,10 +297,8 @@ mcp_servers:
   - anthropic-add-key
 ```
 
-This is the ungated, unconditioned listing every caller gets. Step 5 adds
-two more listeners on the same path, matched on a `Team` header, that
-intercept it for callers with a recognized group and return a filtered
-list instead — this one keeps serving as the fallback for everyone else.
+This is the unfiltered listing — the real Anthropic catalog. Step 4 puts
+it behind SSO.
 
 ```bash
 kongctl apply -f 2-claude-integration.yaml
@@ -304,8 +307,15 @@ kongctl apply -f 2-claude-integration.yaml
 ![Claude models in Konnect](images/step3-models/01-models-list.png)
 
 **Verify:** `kongctl diff -f 2-claude-integration.yaml` reports no
-changes, and `curl http://localhost:8000/anthropic/v1/models` returns the
-real Anthropic model catalog (no group filtering yet — that's Step 5).
+changes, and `curl http://localhost:8000/anthropic/v1/models -H "anthropic-version: 2023-06-01"`
+returns the real Anthropic model catalog (Anthropic requires the
+`anthropic-version` header). You can also test inference:
+
+```bash
+curl http://localhost:8000/anthropic/v1/messages \
+  -H "content-type: application/json" -H "anthropic-version: 2023-06-01" \
+  -d '{"model":"claude-haiku-5-5","max_tokens":50,"messages":[{"role":"user","content":"Say hi"}]}'
+```
 
 #### Test it with a real client
 
@@ -327,227 +337,94 @@ round-trips a real completion through Kong to Anthropic and back.
 
 ### 4. Enable SSO
 
-Requires a valid Okta-issued bearer token on every model. Skip this step
-(and Step 5) if you don't need SSO.
+Requires a valid Okta-issued bearer token on every model and on model
+discovery. Skip this step if you don't need SSO.
 
 ```yaml
-identity_providers:
+auth_strategies:
 - ref: okta-groups-idp
   type: openid-connect
   config:
     issuer: "{vault://claude-gateway-vault/okta-issuer}"
     client_id: ["{vault://claude-gateway-vault/okta-client-id}"]
     client_secret: ["{vault://claude-gateway-vault/okta-client-secret}"]
+    cache_tokens_salt: "{vault://claude-gateway-vault/oidc-cache-tokens-salt}"
+    auth_methods: [bearer, authorization_code]
+    scopes: [openid]
+    consumer_groups_claim: [team]   # maps the Okta `team` claim to a consumer group
+    consumer_optional: true
 
 consumer_groups:
 - name: kong-premium
 - name: kong-standard
 ```
 
+Every model, and the `anthropic-models-endpoint` agent from Step 3,
+references the strategy with `access.auth_strategies: [okta-groups-idp]`.
+
 ```bash
 kongctl apply -f 3-identity-provider.yaml
 ```
 
-`consumer_groups_claim` — which maps the Okta `team` claim onto the
-`consumer_groups` above — is a supported field on the Kong AI Gateway
-identity provider API. `kongctl`'s declarative schema (1.10.0) doesn't
-expose it yet, so it can't be set from the YAML above; set it once via a
-direct API call after every apply to this file instead:
-
-```bash
-GW=<your-gateway-id>
-IDP=<your-identity-provider-id>
-kongctl api put "/v1/ai-gateways/${GW}/identity/${IDP}" -f - <<'JSON'
-{
-  "name": "okta-groups-idp",
-  "display_name": "Okta OIDC (group claim)",
-  "type": "openid-connect",
-  "config": {
-    "issuer": "{vault://claude-gateway-vault/okta-issuer}",
-    "client_id": ["{vault://claude-gateway-vault/okta-client-id}"],
-    "client_secret": ["{vault://claude-gateway-vault/okta-client-secret}"],
-    "cache_tokens_salt": "{vault://claude-gateway-vault/oidc-cache-tokens-salt}",
-    "auth_methods": ["bearer", "authorization_code"],
-    "consumer_groups_claim": ["team"],
-    "consumer_optional": true
-  }
-}
-JSON
-```
-
-Find your gateway and identity-provider IDs with:
-
-```bash
-kongctl get ai-gateway -o json
-kongctl get ai-gateway identity-providers --gateway-name "Claude Tiered Gateway" -o json
-```
-
-**Verify:** a request to `/anthropic` without a token is rejected, and so
-is `GET /anthropic/v1/models` once the `okta-models-auth` policy below is
-applied.
+**Verify:** without a token, `GET /anthropic/v1/models` redirects (302) to
+your Okta authorization endpoint, and a request to `/anthropic/v1/messages`
+with an invalid bearer token returns `401 Unauthorized`.
 
 #### Test it with a real client
 
-The static-key setup from Step 3's client test now fails on inference,
-since every model carries `access.identity_providers: [okta-groups-idp]`
-and a dummy key isn't a valid Okta token. Model discovery still
-succeeds — `GET /anthropic/v1/models` isn't gated by an identity provider
-the way models are, only by the unconditioned listener from Step 3:
-
-![Model discovery succeeds, inference fails without a valid token](images/step4-sso/01-no-token-inference-fails.png)
-
-That gap is real, not just a stale key issue: `ai_gateway_mcp_server`s
-have no `access.identity_providers` field at all (`kongctl explain
-ai_gateway.mcp_servers.access --extended` only lists
-`acl_attribute_type`/`acls`/`default_tool_acls`), so there's no
-declarative way to point `anthropic-models-endpoint` at `okta-groups-idp`
-the way the models above are. The fix is to attach the `openid-connect`
-plugin directly as its own policy instead:
-
-```yaml
-policies:
-- ref: okta-models-auth
-  type: openid-connect
-  config:
-    issuer: "{vault://claude-gateway-vault/okta-issuer}"
-    client_id: ["{vault://claude-gateway-vault/okta-client-id}"]
-    client_secret: ["{vault://claude-gateway-vault/okta-client-secret}"]
-    cache_tokens_salt: "{vault://claude-gateway-vault/oidc-cache-tokens-salt}"
-    auth_methods: ["bearer"]
-    consumer_optional: true
-
-mcp_servers:
-- ref: anthropic-models-endpoint
-  policies:
-  - okta-models-auth
-  - anthropic-add-key   # unchanged from Step 3
-```
-
-This is already part of `3-identity-provider.yaml` (re-running `kongctl
-apply -f 3-identity-provider.yaml` picks it up) — once applied, model
-discovery requires the same valid token inference does.
+The static-key setup from Step 3's client test now fails, since every
+model and the model-discovery agent require a valid Okta token and a
+dummy key isn't one.
 
 To get a real token, switch the client from a static key to interactive
-OIDC sign-in instead:
+OIDC sign-in instead. In Claude Desktop's third-party inference settings:
 
-1. **Gateway base URL**: same as before — `http://localhost:8000/anthropic`.
-2. **Sign-in session lifetime**: how long a sign-in stays valid before the
+1. **Credential kind**: change from `Static API key` (Step 3) to
+   `Identity provider sign-in (OIDC)`.
+2. **Gateway base URL**: same as before — `http://localhost:8000/anthropic`.
+3. **Sign-in session lifetime**: how long a sign-in stays valid before the
    client shows a re-authenticate banner (its own timer, independent of
-   Kong's session handling) — e.g. `6000` seconds.
-3. **Credential kind**: change from `Static API key` (Step 3) to
-   `Interactive sign-in` — this is what reveals the **Gateway SSO IdP
-   (OIDC)** panel below.
-4. **Gateway SSO IdP (OIDC)**:
+   Kong's session handling) — e.g. `60000` seconds.
+4. **Identity provider sign-in flow**: `browser` (the system browser).
+
+   ![Claude Desktop connection settings: credential kind, base URL, session lifetime and sign-in flow](images/step4-sso/03-claude-connection.png)
+5. **Identity provider (OIDC)**:
    - **Client ID**: your `OKTA_CLIENT_ID`.
    - **Issuer URL**: your Okta issuer's **base** URL, e.g.
      `https://<your-okta-domain>/oauth2/default` — **not** the full
      `/.well-known/openid-configuration` discovery URL. This is different
      from the `okta-issuer` vault value, which Kong's `openid-connect`
-     identity provider needs in the full discovery-URL form; the client
+     auth strategy needs in the full discovery-URL form; the client
      derives the discovery document itself from the base issuer.
    - **Bearer token**: `Access token` — matches the `bearer` entry in
      `auth_methods` above, which validates an OAuth access token.
-   - **Scopes**: `openid`.
+   - **Scopes**: the scope your Okta authorization server issues for this
+     app — `claude-access` in this example.
    - **Append offline_access**: **on** — so the IdP returns a refresh
      token for silent renewal.
-   - **Redirect port**: `53180` — this is why
-     `http://127.0.0.1:53180/callback` needs to be a registered redirect
-     URI in Okta (see Prerequisites): the client opens your browser for
-     login and listens on this local port for the callback.
+   - **Redirect port**: `8765`, and **Redirect host**: `localhost`. The
+     client opens your browser for login and listens on this local port
+     for the callback, so `http://localhost:8765/callback` must be a
+     registered redirect URI in Okta (see Prerequisites).
    - **Additional redirect referrer hosts**: leave as the default
      (authorization URL host only) unless Okta completes sign-in from a
      different host than the authorization URL's.
 
-   ![Gateway SSO IdP (OIDC) configuration](images/step4-sso/02-oidc-config.png)
-5. Custom inference headers aren't needed for this step.
-6. Click **Test connection** — you'll be redirected to log in: the client
+   ![Claude Desktop identity provider (OIDC) settings for Okta](images/step4-sso/04-claude-oidc-provider.png)
+6. Custom inference headers aren't needed for this step.
+7. Click **Test connection** — you'll be redirected to log in: the client
    opens your browser and sends you to Okta to sign in (including MFA, if
    your org requires it). Once you complete sign-in, **Test connection**
-   shows green, and both model discovery and inference work, using the
+   shows green with an inference result "via identity provider", using the
    real access token instead of the static key.
 
-### 5. Filter models by group
+   ![Test connection: 1-token inference completion via identity provider](images/step4-sso/05-inference-test.png)
+8. Click **Test model discovery**. It returns every model the gateway
+   exposes — 14 here — through the same token.
 
-Layers a per-group view on top of the `anthropic-models-endpoint`
-listener from Step 3: `GET /anthropic/v1/models` returns a different list
-depending on the caller's `team` claim, falling back to the real
-Anthropic catalog from Step 3 for anyone with no recognized group. Both
-new listeners also carry the `okta-models-auth` policy from Step 4, so a
-forged `Team` header alone can't reach the filtered list without a real
-token — the pre-function below that reads the claim doesn't verify the
-JWT signature.
+   ![Test model discovery: found 14 models](images/step4-sso/06-model-discovery.png)
 
-```yaml
-mcp_servers:
-- ref: claude-models-premium
-  type: passthrough-listener
-  config:
-    route:
-      paths: [/anthropic/v1/models]
-      headers:
-        Team: [kong-premium]
-  policies:
-  - okta-models-auth
-  - claude-models-premium-list   # returns a static, premium-only model list
-```
-
-```bash
-kongctl apply -f 6-per-group-model-listing.yaml
-```
-
-**Verify:** call `GET /anthropic/v1/models` with a `kong-premium` token
-and a `kong-standard` token — each returns a different model list.
-
-#### What's in the access token
-
-The `team` claim comes back as a plain custom claim on the Okta access
-token, alongside the standard OIDC ones. Decoded, a `kong-standard`
-user's token looks like:
-
-```json
-{
-  "ver": 1,
-  "jti": "AT.BD_sfLzShWmrnaHt3kX6CI0hhehOMyuaYOWK4EegfsQ",
-  "iss": "https://integrator-1741022.okta.com/oauth2/default",
-  "aud": "api://default",
-  "iat": 1784432546,
-  "exp": 1784436146,
-  "cid": "0oa15d4jr5oIR5Eel698",
-  "uid": "00u15c6ukel5jXEd0698",
-  "scp": ["openid"],
-  "auth_time": 1784432545,
-  "sub": "declan.keane+standard@konghq.com",
-  "company-groups": ["Everyone", "kong-standard"],
-  "clientId": "0oa15d4jr5oIR5Eel698",
-  "team": "kong-standard"
-}
-```
-
-`company-groups` is Okta's own group-membership claim, listing every
-group the user belongs to — this repo doesn't read it. `team` is the
-single custom claim actually driving everything here: the
-`consumer_groups_claim` on `okta-groups-idp` (Step 4) maps it onto a
-Konnect consumer_group for spend limits (Step 7), and the
-`team-claim-header` pre-function (this step) copies it onto a `Team`
-header for the mcp_servers above to match on. Add `team` as a custom
-claim on your Okta authorization server if it isn't already there — this
-repo doesn't work off `company-groups` or any other group claim as-is.
-
-#### Test it with a real client
-
-Sign in as a user whose `team` claim resolves to `kong-standard` (5
-Opus-tier models, per [What you'll build](#what-youll-build)) using the
-same interactive OIDC connection from Step 4 — no client reconfiguration
-needed, since Kong is deciding the list, not the client:
-
-![Model discovery finds 5 models for a kong-standard user, inference still works](images/step5-filtering/01-standard-tier-test.png)
-
-Model discovery now returns exactly the standard tier's 5 models instead
-of the full catalog, and inference still succeeds through the identity
-provider — confirming the group-based filtering and the SSO gate from
-Step 4 are both applying to this token correctly.
-
-### 6. Add a usage dashboard
+### 5. Add a usage dashboard
 
 `5-dashboard.json` holds a Konnect Analytics dashboard for cost, token,
 and request visibility across models and consumers. Import it from the
@@ -556,10 +433,10 @@ the API once you're ready to automate it.
 
 ![Dashboard detail — cost, tokens, requests, model/dev breakdowns, and latency](images/step5-dashboard/02-dashboard-detail.png)
 
-### 7. Set spend limits
+### 6. Set spend limits
 
 Adds a cost-based budget per group, computed from each model's
-`input_cost`/`output_cost` — not a token count, since the 12 models span
+`input_cost`/`output_cost` — not a token count, since the models span
 a wide price range.
 
 ```yaml
@@ -572,19 +449,25 @@ policies:
     - match:
       - type: consumer_group
         values: [kong-premium]
+      window_type: sliding
       limits:
-      - limit: 5.0   # USD per window
+      - limit: 5.0          # USD per window, not tokens
+        window_size: 60     # seconds
         tokens_count_strategy: cost
     # kong-standard follows the same shape, limit: 1.0
 ```
 
+The policy is attached to every model with `policies: [tiered-cost-budget]`.
+Budget counters are per data plane (`strategy: local`); switch to Redis for
+a shared budget across several data planes.
+
 ```bash
-kongctl apply -f 7-rate-limiting-policy.yaml
+kongctl apply -f 6-rate-limiting-policy.yaml
 ```
 
 ![Per-group cost budget policy in Konnect](images/step7-budgets/01-per-group-cost-budget-policy.png)
 
-**Verify:** `kongctl diff -f 7-rate-limiting-policy.yaml` reports no
+**Verify:** `kongctl diff -f 6-rate-limiting-policy.yaml` reports no
 changes.
 
 ## Repo layout
@@ -595,14 +478,12 @@ changes.
 ├── 1-gateway.yaml                   # Step 1
 ├── 2-claude-integration.yaml        # Step 3
 ├── 3-identity-provider.yaml         # Step 4
-├── 6-per-group-model-listing.yaml   # Step 5
-├── 5-dashboard.json                 # Step 6
-├── 7-rate-limiting-policy.yaml      # Step 7
+├── 5-dashboard.json                 # Step 5
+├── 6-rate-limiting-policy.yaml      # Step 6
 ├── scripts/
 │   └── bootstrap-vault.sh           # Step 2
 ├── images/                          # console screenshots
-├── secrets/                         # local-only staging for real credentials (git-ignored)
-└── classic-kong-gateway/            # earlier classic-Kong-Gateway (1.x, decK) build
+└── secrets/                         # local-only staging for real credentials (git-ignored)
 ```
 
 ## Secrets

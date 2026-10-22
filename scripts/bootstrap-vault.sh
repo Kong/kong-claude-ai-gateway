@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-command vault setup for the AI Gateway 2.0 control plane this repo
+# One-command vault setup for the AI Gateway control plane this repo
 # builds (see 1-gateway.yaml). Ensures a Konnect config store exists,
 # seeds it from your local .env, and ensures a vault entity points at it —
 # idempotent, safe to re-run any time a secret changes.
