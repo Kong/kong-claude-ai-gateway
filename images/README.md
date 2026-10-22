@@ -11,14 +11,10 @@ Screenshots and diagrams referenced from `README.md`.
   models listed under the AI Gateway's **Models** tab after applying
   `2-claude-integration.yaml`, plus a real client's connection/model-
   discovery test against the gateway).
-- `step4-sso/` — a real client's connection test for Step 4: failing on
-  inference with a static key once SSO is enabled, then the interactive
-  OIDC sign-in config that gets a real token instead.
-- `step5-filtering/` — a real client's connection test for Step 5: model
-  discovery returning the filtered, group-specific list instead of the
-  full catalog.
-- `step5-dashboard/` — Konnect console walkthrough for Step 6 (the
+- `step4-sso/` — Claude Desktop's interactive OIDC sign-in settings for
+  Step 4, and the resulting inference and model-discovery test results.
+- `step5-dashboard/` — Konnect console walkthrough for Step 5 (the
   imported usage dashboard).
-- `step7-budgets/` — Konnect console walkthrough for Step 7 (the
+- `step7-budgets/` — Konnect console walkthrough for Step 6 (the
   per-group cost budget policy, `tiered-cost-budget`, as it appears under
   the AI Gateway's **Policies** tab).

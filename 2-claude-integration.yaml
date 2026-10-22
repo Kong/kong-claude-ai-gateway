@@ -3,11 +3,11 @@
 # Adds the model_providers Kong can reach Claude through, one
 # ai_gateway_model per Claude tier (Sonnet, Haiku, Opus), each exposed at
 # the same /anthropic route and disambiguated by the "model" the client
-# requests, and the passthrough listener + key-injection policy that make
+# requests, and the models agent + key-injection policy that make
 # GET /anthropic/v1/models work. No auth, no rate limiting yet — this step
 # only proves the gateway can proxy real Claude traffic and list models
-# before anything else layers on top (see 4-rate-limiting-policy.yaml for
-# the entitlement/tiering layer this is designed to carry).
+# before anything else layers on top (see 6-rate-limiting-policy.yaml for
+# the spend-limit layer this is designed to carry).
 #
 # One model per tier, not one model with many targets: targets under the
 # same ai_gateway_model are meant to be interchangeable (e.g. the same
@@ -51,15 +51,11 @@
 # regardless of what this file contains ("config.model [properties]:
 # property \"alias\" is unsupported").
 #
-# `body` was originally reported as rejected here (400: "property \"body\"
-# is unsupported"), which is why this file used `path_aliases` at first —
-# but that was against the `kong/kong-ai-gateway-dev:2.0.1-rc.4` data
-# plane. Against `2.0.1-rc.5`, `body` is accepted and is the only shape
-# that actually routes real client traffic (see the note above this
-# file's `models:` section) — `path_aliases` reads the URL path, which
-# never carries the model string for real requests. Re-verify against
-# `kongctl explain ai_gateway.models.config.route.model --extended` and a
-# live `kongctl diff` if you're on a different image version.
+# `route.model.body` (read the model from the JSON request body) is the
+# shape that routes real client traffic; `path_aliases` reads the URL path,
+# which never carries the model string. Re-verify against
+# `kongctl explain ai_gateway.models.config.route.model --extended` if you
+# change data plane versions.
 #
 # Apply: kongctl apply -f 2-claude-integration.yaml
 
@@ -70,8 +66,8 @@ _defaults:
 ai_gateways:
 - ref: claude-tiered-gateway
   name: claude-tiered-gateway
-  display_name: "Claude Tiered Gateway"
-  description: "Kong AI Gateway 2.0 control plane fronting Claude for the kong-app-gateway-claude example"
+  display_name: "Claude Gateway"
+  description: "Kong AI Gateway control plane fronting Claude for the kong-app-gateway-claude example"
   labels:
     repo: kong-app-gateway-claude
     example: tiered-model-entitlement
@@ -92,12 +88,7 @@ ai_gateways:
   # Anthropic catalog — ai_gateway_models above only route inference calls
   # (POST, matched on the body's "model" field); a model list has no body
   # to match on, so it needs its own resource. Ungated on purpose: this is
-  # the base, unconditioned listing every caller gets. 6-per-group-model-
-  # listing.yaml (Step 5) layers two more mcp_servers on the same
-  # /anthropic/v1/models path, matched on a Team header, that intercept
-  # this route for callers with a recognized group and return a filtered
-  # list instead — this one keeps serving as the fallback for everyone
-  # else, exactly as it does once Step 5 is applied.
+  # the listing every caller gets.
   policies:
   # `add` alone only sets the header if the incoming request doesn't
   # already carry one with this name — a caller could send their own
@@ -119,14 +110,12 @@ ai_gateways:
         headers:
         - "{vault://claude-gateway-vault/anthropic-api-key-header}"
 
-  mcp_servers:
+  agents:
   - ref: anthropic-models-endpoint
     name: anthropic-models-endpoint
-    display_name: "anthropic-models endpoint"
-    type: passthrough-listener
+    display_name: "Anthropic models endpoint"
+    type: http
     enabled: true
-    access:
-      acl_attribute_type: consumer
     config:
       url: https://api.anthropic.com/v1/models
       route:
@@ -137,10 +126,6 @@ ai_gateways:
         - https
       logging:
         payloads: false
-        audits: false
-      server:
-        forward_client_headers: false
-        timeout: 10000
       max_request_body_size: 8388608
     policies:
     - anthropic-add-key
@@ -172,8 +157,8 @@ ai_gateways:
           # exists as its own sibling model rather than a second alias
           # here — same target, same provider, just a distinct model
           # resource so both names route correctly.
-          body:
-            model:
+          body_param: model
+          values:
             - claude-sonnet-4-5
       model:
         name_header: true
@@ -204,8 +189,8 @@ ai_gateways:
         - http
         - https
         model:
-          body:
-            model:
+          body_param: model
+          values:
             - claude-sonnet-5
       model:
         name_header: true
@@ -236,8 +221,8 @@ ai_gateways:
         - http
         - https
         model:
-          body:
-            model:
+          body_param: model
+          values:
             - claude-haiku-4-5-20251001
       model:
         name_header: true
@@ -270,8 +255,8 @@ ai_gateways:
         - http
         - https
         model:
-          body:
-            model:
+          body_param: model
+          values:
             - claude-opus-4-8
       model:
         name_header: true
@@ -287,7 +272,7 @@ ai_gateways:
 
   # Everything below was cross-checked against the live Anthropic model
   # catalog (GET /anthropic/v1/models via the anthropic-models-endpoint
-  # passthrough listener defined above, anthropic-version: 2023-06-01)
+  # agent defined above, anthropic-version: 2023-06-01)
   # rather than guessed — one ai_gateway_model per model id Anthropic
   # actually returned that wasn't covered above yet.
 
@@ -308,8 +293,8 @@ ai_gateways:
         - http
         - https
         model:
-          body:
-            model:
+          body_param: model
+          values:
             - claude-opus-5
       model:
         name_header: true
@@ -340,8 +325,8 @@ ai_gateways:
         - http
         - https
         model:
-          body:
-            model:
+          body_param: model
+          values:
             - claude-fable-5
       model:
         name_header: true
@@ -353,11 +338,145 @@ ai_gateways:
         type: anthropic
         version: "2023-06-01"
         # No pricing precedent for this model anywhere in this repo (unlike
-        # Opus/Sonnet/Haiku, which mirror 4-rate-limiting-policy.yaml's
+        # Opus/Sonnet/Haiku, which mirror the tiers in 6-rate-limiting-policy.yaml's
         # tiers) — priced provisionally at Opus-tier as a pure guess. Replace
         # with real Anthropic pricing before this feeds any real budget.
         input_cost: 15    # USD / million input tokens — placeholder, replace with current pricing
         output_cost: 75   # USD / million output tokens — placeholder, replace with current pricing
+
+  - ref: claude-opus-5-5
+    type: model
+    name: claude-opus-5-5
+    display_name: "Claude Opus 5.5"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body_param: model
+          values:
+            - claude-opus-5-5
+      model:
+        name_header: true
+    targets:
+    - name: claude-opus-5-5
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 15    # USD / million input tokens — placeholder, replace with current pricing
+        output_cost: 75   # USD / million output tokens — placeholder, replace with current pricing
+
+  - ref: claude-sonnet-5-5
+    type: model
+    name: claude-sonnet-5-5
+    display_name: "Claude Sonnet 5.5"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body_param: model
+          values:
+            - claude-sonnet-5-5
+      model:
+        name_header: true
+    targets:
+    - name: claude-sonnet-5-5
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 5    # USD / million input tokens — placeholder, replace with current pricing
+        output_cost: 15   # USD / million output tokens — placeholder, replace with current pricing
+
+  - ref: claude-fable-5-1
+    type: model
+    name: claude-fable-5-1
+    display_name: "Claude Fable 5.1"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body_param: model
+          values:
+            - claude-fable-5-1
+      model:
+        name_header: true
+    targets:
+    - name: claude-fable-5-1
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        # No pricing precedent for this model anywhere in this repo (unlike
+        # Opus/Sonnet/Haiku, which mirror the tiers in 6-rate-limiting-policy.yaml's
+        # tiers) — priced provisionally at Opus-tier as a pure guess. Replace
+        # with real Anthropic pricing before this feeds any real budget.
+        input_cost: 15    # USD / million input tokens — placeholder, replace with current pricing
+        output_cost: 75   # USD / million output tokens — placeholder, replace with current pricing
+
+  - ref: claude-haiku-5-5
+    type: model
+    name: claude-haiku-5-5
+    display_name: "Claude Haiku 5.5"
+    enabled: true
+    formats:
+    - type: anthropic
+    capabilities:
+    - generate
+    config:
+      route:
+        paths:
+        - /anthropic
+        protocols:
+        - http
+        - https
+        model:
+          body_param: model
+          values:
+            - claude-haiku-5-5
+      model:
+        name_header: true
+      logging:
+        payloads: true
+    targets:
+    - name: claude-haiku-5-5
+      provider: anthropic-direct
+      weight: 100
+      config:
+        type: anthropic
+        version: "2023-06-01"
+        input_cost: 0.8    # USD / million input tokens — placeholder, replace with current pricing
+        output_cost: 4   # USD / million output tokens — placeholder, replace with current pricing
 
   - ref: claude-opus-4-7
     type: model
@@ -376,8 +495,8 @@ ai_gateways:
         - http
         - https
         model:
-          body:
-            model:
+          body_param: model
+          values:
             - claude-opus-4-7
       model:
         name_header: true
@@ -408,8 +527,8 @@ ai_gateways:
         - http
         - https
         model:
-          body:
-            model:
+          body_param: model
+          values:
             - claude-sonnet-4-6
       model:
         name_header: true
@@ -440,8 +559,8 @@ ai_gateways:
         - http
         - https
         model:
-          body:
-            model:
+          body_param: model
+          values:
             - claude-opus-4-6
       model:
         name_header: true
@@ -474,8 +593,8 @@ ai_gateways:
         model:
           # Dated id, exactly as returned by GET /v1/models — this
           # release doesn't have an undated alias upstream.
-          body:
-            model:
+          body_param: model
+          values:
             - claude-opus-4-5-20251101
       model:
         name_header: true
@@ -509,8 +628,8 @@ ai_gateways:
           # Distinct from the "claude" model's "claude-sonnet-4-5" alias
           # above (the undated shorthand some older clients send) — this
           # one matches the exact dated id Anthropic's API itself uses.
-          body:
-            model:
+          body_param: model
+          values:
             - claude-sonnet-4-5-20250929
       model:
         name_header: true
@@ -541,8 +660,8 @@ ai_gateways:
         - http
         - https
         model:
-          body:
-            model:
+          body_param: model
+          values:
             - claude-opus-4-1-20250805
       model:
         name_header: true
