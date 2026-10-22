@@ -8,8 +8,8 @@ answer questions like "which team is burning through Opus budget" or
 "can we cut this contractor's access off today." Kong AI Gateway sits in
 front of all of them as one policy point: it terminates every request on
 its way to Anthropic, checks the caller's identity against your IdP, and
-applies spend limits by group — all without the
-developer changing how they invoke Claude Code, Chat, or Cowork.
+applies spend limits by group — all without the developer changing how
+they invoke Claude Code, Chat, or Cowork.
 Concretely, that means:
 
 - **Gate** — every request must carry a valid, signed bearer token from
@@ -102,9 +102,9 @@ in your own shell.
 
 ### If you're using SSO
 
-Step 4 adds SSO, and Step 6 uses the caller's group for spend limits. Kong AI Gateway's identity
-provider works with any OIDC-compliant provider — this walkthrough uses
-Okta, but the same setup applies to Entra ID or others. If you want SSO,
+Step 4 adds SSO, and Step 6 uses the caller's group for spend limits.
+Kong AI Gateway's OIDC auth strategy works with any OIDC-compliant
+provider — this walkthrough uses Okta, but the same setup applies to Entra ID or others. If you want SSO,
 set up your OIDC app before you get there:
 
 1. Register an OIDC app with your provider (Web application,
@@ -116,10 +116,8 @@ set up your OIDC app before you get there:
 2. Add your gateway's data-plane URL as an allowed redirect URI — this is
    what Konnect's own "Interactive sign-in" test flow uses. If you also
    want to test with a native client like Claude Desktop, add its loopback
-   callback too: `http://localhost:65201/callback`. Claude Desktop's OIDC
-   flow listens on that local port for the callback, and the **Redirect
-   port** you configure in Desktop (see Step 4's "Test it with a real
-   client") must match it.
+   callback too: `http://localhost:65201/callback` (see Step 4's "Test it
+   with a real client").
 3. Add a custom claim named `team` to the access token, with a value per
    user or group — this example expects `kong-premium` and
    `kong-standard`, which Step 6 uses to set spend limits
@@ -127,8 +125,8 @@ set up your OIDC app before you get there:
 4. Note the issuer URL, client ID, and client secret for `.env`.
 
 If you don't need SSO, skip Step 4 and every model will be open
-once Step 3 is applied. Kong AI Gateway also ships a built-in identity
-provider, so you can still restrict access with simple API keys instead
+once Step 3 is applied. Kong AI Gateway also supports a `key-auth` auth
+strategy, so you can still restrict access with simple API keys instead
 of a full OIDC flow.
 
 ## Steps
@@ -270,8 +268,8 @@ models:
 `ai_gateway_model`s above only route inference calls (`POST`, matched on
 the `model` field in the request body) — a model *list* request has no
 body to match on, so `GET /anthropic/v1/models` needs its own agent
-(a plain HTTP passthrough to Anthropic), plus a policy to inject the Anthropic key on the way out. That
-policy sets the header both ways — `add` covers a caller that sends none,
+(a plain HTTP passthrough to Anthropic), plus a policy to inject the
+Anthropic key on the way out. That policy sets the header both ways — `add` covers a caller that sends none,
 `replace` overwrites one a caller already sent — so the real key always
 wins either way:
 
@@ -351,6 +349,7 @@ auth_strategies:
     client_secret: ["{vault://claude-gateway-vault/okta-client-secret}"]
     cache_tokens_salt: "{vault://claude-gateway-vault/oidc-cache-tokens-salt}"
     auth_methods: [bearer, authorization_code]
+    scopes: [openid]
     consumer_groups_claim: [team]   # maps the Okta `team` claim to a consumer group
     consumer_optional: true
 
@@ -403,10 +402,10 @@ OIDC sign-in instead. In Claude Desktop's third-party inference settings:
    - **Append offline_access**: **on** — so the IdP returns a refresh
      token for silent renewal.
    - **Redirect port** and **Redirect host**: the client opens your
-     browser for login and listens on this local port for the callback, so
-     the redirect URI built from them must be registered in Okta. Register
-     `http://localhost:65201/callback` (see Prerequisites) and set the
-     port to match, with the host set to `localhost`.
+     browser for login and listens on a local port for the callback, so
+     the loopback callback must be registered as a redirect URI in Okta —
+     `http://localhost:65201/callback` (see Prerequisites). Set the host to
+     `localhost`.
    - **Additional redirect referrer hosts**: leave as the default
      (authorization URL host only) unless Okta completes sign-in from a
      different host than the authorization URL's.
@@ -450,11 +449,17 @@ policies:
     - match:
       - type: consumer_group
         values: [kong-premium]
+      window_type: sliding
       limits:
-      - limit: 5.0   # USD per window
+      - limit: 5.0          # USD per window, not tokens
+        window_size: 60     # seconds
         tokens_count_strategy: cost
     # kong-standard follows the same shape, limit: 1.0
 ```
+
+The policy is attached to every model with `policies: [tiered-cost-budget]`.
+Budget counters are per data plane (`strategy: local`); switch to Redis for
+a shared budget across several data planes.
 
 ```bash
 kongctl apply -f 6-rate-limiting-policy.yaml
