@@ -32,6 +32,7 @@ declaratively with `kongctl`.
   - [4. Enable SSO](#4-enable-sso)
   - [5. Add a usage dashboard](#5-add-a-usage-dashboard)
   - [6. Set spend limits](#6-set-spend-limits)
+  - [7. Set up Claude Code](#7-set-up-claude-code)
 - [Repo layout](#repo-layout)
 - [Secrets](#secrets)
 
@@ -470,6 +471,91 @@ kongctl apply -f 6-rate-limiting-policy.yaml
 **Verify:** `kongctl diff -f 6-rate-limiting-policy.yaml` reports no
 changes.
 
+### 7. Set up Claude Code
+
+Points Claude Code at the gateway and signs you in with Okta — the same
+SSO as Claude Desktop in Step 4, so the requests carry your `team` claim
+and count against your group's budget from Step 6. This step changes
+nothing in Kong or Okta; it only configures your computer. It's based on
+Kong's [Claude Code SSO
+cookbook](https://developer.konghq.com/cookbooks/claude-code-sso/).
+
+Claude Code can't run an OIDC login on its own, so it calls a small helper
+script (an [`apiKeyHelper`](https://docs.claude.com/en/docs/claude-code/settings))
+whenever it needs a credential. The helper,
+[`scripts/okta-claude-auth.sh`](scripts/okta-claude-auth.sh), signs you in
+through your browser, caches the token, and refreshes it silently.
+
+**Before you start**
+- Steps 1–4 are done and the data plane is running (`docker ps` shows
+  `claude-aigw-dp`).
+- [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) is
+  installed (`claude --version` works).
+- Your `.env` has `OKTA_ISSUER` and `OKTA_CLIENT_ID` (already set from
+  Step 2).
+- `http://localhost:8765/callback` is a registered redirect URI in Okta
+  (already done for Claude Desktop in Step 4). The helper reuses that port,
+  so close Claude Desktop's sign-in window first if it's open.
+
+**Set up**
+
+```bash
+scripts/setup-claude-code.sh
+```
+
+This copies the helper to `~/.claude/okta-claude-auth.sh` and merges the
+settings below into `~/.claude/settings.json`. Your existing settings are
+kept, with a backup at `~/.claude/settings.json.bak`.
+
+```json
+{
+  "apiKeyHelper": "~/.claude/okta-claude-auth.sh",
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://localhost:8000/anthropic",
+    "OKTA_DOMAIN": "https://<your-okta-domain>",
+    "OKTA_CLIENT_ID": "<your client id>",
+    "OKTA_AUTH_SERVER": "default",
+    "OKTA_SCOPES": "openid claude-access offline_access",
+    "ANTHROPIC_MODEL": "claude-sonnet-5-5",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-5-5",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5-5",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-haiku-5-5",
+    "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1"
+  }
+}
+```
+
+The Okta values go in `env` because Claude Code runs the helper with a
+clean environment. The model settings map Claude Code's Sonnet, Opus and
+Haiku to models you registered in Step 3 — change them to any model id the
+gateway serves. `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` strips beta
+fields that only Anthropic's own API accepts.
+
+**Run it**
+
+```bash
+unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN   # either one bypasses the helper
+claude
+```
+
+The first request opens your browser to sign in with Okta. After that the
+token is cached in `~/.claude/okta-cache/` and refreshed automatically, so
+you only sign in again when the refresh token expires. Ask Claude Code
+something, then confirm the request went through the gateway — it shows up
+in the Konnect dashboard from Step 5.
+
+**Troubleshooting**
+- *Browser doesn't open* — the helper prints the sign-in URL; paste it
+  into a browser.
+- *Okta shows "Bad Request"* — the redirect URI isn't registered, or the
+  `claude-access` scope isn't allowed for the app. Both must match Step 4.
+- *`401 Unauthorized` from the gateway* — delete the cache
+  (`rm -rf ~/.claude/okta-cache`) and sign in again.
+- *Claude Code ignores the gateway* — an API key is set in your shell or
+  `ANTHROPIC_BASE_URL` is overridden elsewhere; run `unset
+  ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN` and check `claude` again.
+- *Undo* — restore `~/.claude/settings.json.bak`.
+
 ## Repo layout
 
 ```
@@ -481,7 +567,9 @@ changes.
 ├── 5-dashboard.json                 # Step 5
 ├── 6-rate-limiting-policy.yaml      # Step 6
 ├── scripts/
-│   └── bootstrap-vault.sh           # Step 2
+│   ├── bootstrap-vault.sh           # Step 2
+│   ├── setup-claude-code.sh         # Step 7
+│   └── okta-claude-auth.sh          # Step 7 — Claude Code sign-in helper
 ├── images/                          # console screenshots
 └── secrets/                         # local-only staging for real credentials (git-ignored)
 ```
