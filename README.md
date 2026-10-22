@@ -116,8 +116,9 @@ set up your OIDC app before you get there:
 2. Add your gateway's data-plane URL as an allowed redirect URI — this is
    what Konnect's own "Interactive sign-in" test flow uses. If you also
    want to test with a native client like Claude Desktop, add its loopback
-   callback too: `http://localhost:65201/callback` (see Step 4's "Test it
-   with a real client").
+   callback too: `http://localhost:8765/callback` — Claude Desktop listens
+   on that port for the sign-in callback (see Step 4's "Test it with a real
+   client").
 3. Add a custom claim named `team` to the access token, with a value per
    user or group — this example expects `kong-premium` and
    `kong-standard`, which Step 6 uses to set spend limits
@@ -401,11 +402,10 @@ OIDC sign-in instead. In Claude Desktop's third-party inference settings:
      app — `claude-access` in this example.
    - **Append offline_access**: **on** — so the IdP returns a refresh
      token for silent renewal.
-   - **Redirect port** and **Redirect host**: the client opens your
-     browser for login and listens on a local port for the callback, so
-     the loopback callback must be registered as a redirect URI in Okta —
-     `http://localhost:65201/callback` (see Prerequisites). Set the host to
-     `localhost`.
+   - **Redirect port**: `8765`, and **Redirect host**: `localhost`. The
+     client opens your browser for login and listens on this local port
+     for the callback, so `http://localhost:8765/callback` must be a
+     registered redirect URI in Okta (see Prerequisites).
    - **Additional redirect referrer hosts**: leave as the default
      (authorization URL host only) unless Okta completes sign-in from a
      different host than the authorization URL's.
